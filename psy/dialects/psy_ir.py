@@ -123,7 +123,7 @@ class FileContainer(Operation):
     name = "psy.ir.filecontainer"
 
     file_name = AttributeDef(StringAttr)
-    containers = SingleBlockRegionDef()
+    children = SingleBlockRegionDef()
 
     @staticmethod
     def get(file_name: str,
@@ -145,6 +145,7 @@ class Container(Operation):
     imports = SingleBlockRegionDef()
     routines = SingleBlockRegionDef()
     default_visibility = AttributeDef(StringAttr)
+    is_program = AttributeDef(BoolAttr)
     public_routines = AttributeDef(ArrayAttr)
     private_routines = AttributeDef(ArrayAttr)
 
@@ -156,7 +157,7 @@ class Container(Operation):
             imports: List[Operation],
             routines: List[Operation],
             verify_op: bool = True) -> Container:
-      res = Container.build(attributes={"container_name": container_name, "default_visibility": default_visibility, 
+      res = Container.build(attributes={"container_name": container_name, "default_visibility": default_visibility, "is_program": False,
                                         "public_routines": public_routines, "private_routines": private_routines}, regions=[imports, routines])
       if verify_op:
         res.verify(verify_nested_ops=False)
@@ -191,20 +192,23 @@ class Routine(Operation):
     routine_name = AttributeDef(StringAttr)
     imports = SingleBlockRegionDef()
     args = AttributeDef(ArrayAttr)
-    return_type = AttributeDef(StringAttr)
-    
+    return_var = AttributeDef(AnyAttr())
     local_var_declarations = SingleBlockRegionDef()
     routine_body = SingleBlockRegionDef()
+    is_program = AttributeDef(BoolAttr)    
 
     @staticmethod
     def get(routine_name: Union[str, StringAttr],
-            return_type: str,
+            return_var,
             imports: List[Operation],
             args: List[Operation],            
             local_var_declarations: List[Operation],
             routine_body: List[Operation],
+            is_program=False,             
             verify_op: bool = True) -> Routine:
-        res = Routine.build(attributes={"routine_name": routine_name, "return_type": return_type, "args": args},
+        if return_var is None:
+          return_var=EmptyToken()
+        res = Routine.build(attributes={"routine_name": routine_name, "return_var": return_var, "args": args, "is_program": is_program},
                             regions=[imports, local_var_declarations, routine_body])
         if verify_op:
             # We don't verify nested operations since they might have already been verified
@@ -286,6 +290,10 @@ class Token(ParametrizedAttribute):
 
     var_name = ParameterDef(StringAttr)
     type = ParameterDef(AnyOf([IntegerType, FloatType, DerivedType, ArrayType]))      
+    
+@irdl_attr_definition
+class EmptyToken(ParametrizedAttribute):
+    name = "psy.ir.emptytoken"    
                 
 @irdl_op_definition
 class VarDef(Operation):
@@ -356,8 +364,8 @@ class Literal(Operation):
         return res
       
 @irdl_op_definition
-class If(Operation):
-    name = "psy.ir.if"
+class IfBlock(Operation):
+    name = "psy.ir.ifblock"
 
     cond = SingleBlockRegionDef()
     then = SingleBlockRegionDef()
@@ -368,7 +376,7 @@ class If(Operation):
             then: List[Operation],
             orelse: List[Operation],
             verify_op: bool = True) -> If:
-        res = If.build(regions=[[cond], then, orelse])
+        res = IfBlock.build(regions=[[cond], then, orelse])
         if verify_op:
             # We don't verify nested operations since they might have already been verified
             res.verify(verify_nested_ops=False)
@@ -378,23 +386,23 @@ class If(Operation):
       pass
     
 @irdl_op_definition
-class Do(Operation):
-    name = "psy.ir.do"
+class Loop(Operation):
+    name = "psy.ir.loop"
 
-    iter_name = AttributeDef(StringAttr)
+    variable = AttributeDef(AnyAttr())
     start = SingleBlockRegionDef()
     stop = SingleBlockRegionDef()
     step = SingleBlockRegionDef()
     body = SingleBlockRegionDef()
 
     @staticmethod
-    def get(iter_name: Union[str, StringAttr],
+    def get(variable,
             start: Operation,
             stop: Operation,
             step: Operation,
             body: List[Operation],
             verify_op: bool = True) -> If:
-        res = Do.build(attributes={"iter_name": iter_name}, regions=[[start], [stop], [step], body])
+        res = Loop.build(attributes={"variable": variable}, regions=[[start], [stop], [step], body])
         if verify_op:
             # We don't verify nested operations since they might have already been verified
             res.verify(verify_nested_ops=False)
@@ -404,8 +412,12 @@ class Do(Operation):
       pass
       
 @irdl_op_definition
-class BinaryExpr(Operation):
-    name = "psy.ir.binary_expr"
+class Return(Operation):
+    name = "psy.ir.return"      
+      
+@irdl_op_definition
+class BinaryOperation(Operation):
+    name = "psy.ir.binaryoperation"
 
     op = AttributeDef(StringAttr)
     lhs = SingleBlockRegionDef()
@@ -413,14 +425,28 @@ class BinaryExpr(Operation):
 
     @staticmethod
     def get_valid_ops() -> List[str]:
-        return ["+", "-", "*", "/", "%", "pow", "is", "&&", "||", ">", "<", "==", "!=", ">=", "<=", "copysign"]
+        return [
+        # Arithmetic Operators. ('REM' is remainder AKA 'MOD' in Fortran.)
+        'ADD', 'SUB', 'MUL', 'DIV', 'REM', 'POW', 'SUM',
+        # Relational Operators
+        'EQ', 'NE', 'GT', 'LT', 'GE', 'LE',
+        # Logical Operators
+        'AND', 'OR',
+        # Other Maths Operators
+        'SIGN', 'MIN', 'MAX',
+        # Casting operators
+        'REAL', 'INT', 'CAST',
+        # Array Query Operators
+        'SIZE', 'LBOUND', 'UBOUND',
+        # Matrix and Vector Operators
+        'MATMUL', 'DOT_PRODUCT']
 
     @staticmethod
     def get(op: str,
             lhs: Operation,
             rhs: Operation,
             verify_op: bool = True) -> BinaryExpr:
-        res = BinaryExpr.build(attributes={"op": op}, regions=[[lhs], [rhs]])
+        res = BinaryOperation.build(attributes={"op": op}, regions=[[lhs], [rhs]])
         if verify_op:
             # We don't verify nested operations since they might have already been verified
             res.verify(verify_nested_ops=False)
@@ -428,6 +454,40 @@ class BinaryExpr(Operation):
 
     def verify_(self) -> None:
       pass
+      
+@irdl_op_definition
+class UnaryOperation(Operation):
+    name = "psy.ir.unaryoperation"
+
+    op = AttributeDef(StringAttr)
+    expr = SingleBlockRegionDef()    
+
+    @staticmethod
+    def get_valid_ops() -> List[str]:
+        return [
+        # Arithmetic Operators
+        'MINUS', 'PLUS', 'SQRT', 'EXP', 'LOG', 'LOG10', 'SUM',
+        # Logical Operators
+        'NOT',
+        # Trigonometric Operators
+        'COS', 'SIN', 'TAN', 'ACOS', 'ASIN', 'ATAN',
+        # Other Maths Operators
+        'ABS', 'CEIL',
+        # Casting Operators
+        'REAL', 'INT', 'NINT']
+
+    @staticmethod
+    def get(op: str,
+            expr: Operation,            
+            verify_op: bool = True) -> BinaryExpr:
+        res = UnaryOperation.build(attributes={"op": op}, regions=[[expr]])
+        if verify_op:
+            # We don't verify nested operations since they might have already been verified
+            res.verify(verify_nested_ops=False)
+        return res
+
+    def verify_(self) -> None:
+      pass      
             
 @irdl_op_definition
 class CallExpr(Operation):
@@ -467,10 +527,11 @@ class psyIR:
         self.ctx.register_op(Container)
         self.ctx.register_op(Routine)
         self.ctx.register_op(Import)
+        self.ctx.register_op(Return)
         self.ctx.register_op(VarDef)        
         self.ctx.register_op(Assign)
-        self.ctx.register_op(If)
-        self.ctx.register_op(Do)
+        self.ctx.register_op(IfBlock)
+        self.ctx.register_op(Loop)
         self.ctx.register_op(Literal)
         self.ctx.register_op(ExprName)
         self.ctx.register_op(ArrayAccess)
