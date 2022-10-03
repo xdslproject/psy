@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Optional, Type, Union
 
-from xdsl.dialects.builtin import IntegerAttr, StringAttr, ArrayAttr, ArrayOfConstraint, AnyAttr, BoolAttr, IntAttr
+from xdsl.dialects.builtin import IntegerAttr, StringAttr, ArrayAttr, ArrayOfConstraint, AnyAttr, IntAttr
 from xdsl.ir import Data, MLContext, Operation, ParametrizedAttribute
 from xdsl.irdl import (AnyOf, AttributeDef, SingleBlockRegionDef, builder, ParameterDef,
                        irdl_attr_definition, irdl_op_definition)
@@ -11,10 +11,32 @@ from xdsl.parser import Parser
 from xdsl.printer import Printer
 
 @irdl_attr_definition
+class BoolAttr(Data[bool]):
+    name = "bool"
+    data: bool
+        
+    @staticmethod
+    def parse_parameter(parser: Parser) -> BoolAttr:
+        data = parser.parse_str_literal()
+        if data == "True": return True
+        if data == "False": return False
+        raise Exception(f"bool parsing resulted in {data}")
+        return None
+
+    @staticmethod
+    def print_parameter(data: bool, printer: Printer) -> None:
+        printer.print_string(f'"{data}"')
+
+    @staticmethod
+    @builder
+    def from_bool(data: bool) -> BoolAttr:
+        return BoolAttr(data)
+
+@irdl_attr_definition
 class DerivedType(ParametrizedAttribute):
     name = "derivedtype"
     
-    type = ParameterDef(StringAttr)
+    type : ParameterDef[StringAttr]
     
     @staticmethod
     @builder
@@ -25,57 +47,24 @@ class DerivedType(ParametrizedAttribute):
     @builder
     def from_string_attr(data: StringAttr) -> DerivedType:
         return DerivedType([data])
-      
+        
 @irdl_attr_definition
-class FloatType(ParametrizedAttribute):
-    name = "floattype"
-    
-    kind = ParameterDef(StringAttr)
-    precision = ParameterDef(IntAttr)
-    
-    @staticmethod
-    @builder
-    def from_str(kind: str="", precision:int=4) -> FloatType:
-        return FloatType([StringAttr.from_str(kind), IntAttr.from_int(precision)])
+class EmptyAttr(ParametrizedAttribute):
+    name="empty"
+        
+@irdl_attr_definition
+class NamedType(ParametrizedAttribute):
+    name = "psy.ir.named_type"
+   
+    type_name : ParameterDef[StringAttr]
+    kind : ParameterDef[AnyOf([StringAttr, EmptyAttr])]
+    precision : ParameterDef[AnyOf([IntAttr, EmptyAttr])]            
       
     def set_kind(self, kind):      
-      self.parameters[0]=kind
+      self.parameters[1]=kind
       
     def set_precision(self, precision):
-      self.parameters[1]=precision
-
-    @staticmethod
-    @builder
-    def from_string_attr(kind: StringAttr, precision:IntAttr) -> FloatType:
-        return FloatType([kind, precision])
-      
-@irdl_attr_definition
-class DoublePrecisionType(ParametrizedAttribute):
-    name = "doubletype"      
-      
-@irdl_attr_definition
-class IntegerType(ParametrizedAttribute):
-    name = "integertype"
-    
-    kind = ParameterDef(StringAttr)
-    precision = ParameterDef(IntAttr)
-    
-    @staticmethod
-    @builder
-    def from_str(kind: str="", precision:int=4) -> IntegerType:
-        return IntegerType([StringAttr.from_str(kind), IntAttr.from_int(precision)])
-      
-    def set_kind(self, kind):
-      self.parameters[0]=kind
-      
-    def set_precision(self, precision):
-      self.parameters[1]=IntAttr.from_int(precision)
-
-    @staticmethod
-    @builder
-    def from_string_attr(kind: StringAttr, precision:IntAttr) -> IntegerType:
-        return IntegerType([kind, precision])      
- 
+      self.parameters[2]=precision 
       
 @irdl_attr_definition
 class AnonymousAttr(ParametrizedAttribute):
@@ -86,8 +75,8 @@ class AnonymousAttr(ParametrizedAttribute):
 class ArrayType(ParametrizedAttribute):
     name = "arraytype"
 
-    shape = ParameterDef(ArrayAttr)
-    element_type = ParameterDef(AnyOf([IntegerType, FloatType, DerivedType]))
+    shape : ParameterDef[ArrayAttr]
+    element_type : ParameterDef[AnyOf([NamedType, DerivedType])]
 
     def get_num_dims(self) -> int:
         return len(self.parameters[0].data)
@@ -215,24 +204,25 @@ class Routine(Operation):
             res.verify(verify_nested_ops=False)
         return res
         
-    def isFunction():
-      return not isinstance(attributes["return_var"], EmptyToken)
+    def isFunction(self):
+      return not isinstance(self.attributes["return_var"], EmptyToken)
 
     def verify_(self) -> None:
       pass
     
 @irdl_attr_definition
-class FloatAttr(Data):
+class FloatAttr(Data[float]):
     name = 'psy.ir.float'
     data: float
 
     @staticmethod
-    def parse(parser: Parser) -> Data:
-        val = parser.parse_while(lambda char: char != '>')        
-        return FloatAttr(str(val))        
+    def parse_parameter(parser: Parser) -> Data:
+        val = parser.parse_float_literal()
+        return val
 
-    def print(self, printer: Printer) -> None:
-        printer.print_string(f'{self.data}')
+    @staticmethod
+    def print_parameter(data, printer: Printer) -> None:
+        printer.print_string(f'{data}')
 
     @staticmethod
     @builder
@@ -291,11 +281,11 @@ class MemberAccess(Operation):
 class Token(ParametrizedAttribute):
     name = "psy.ir.token"
 
-    var_name = ParameterDef(StringAttr)
-    type = ParameterDef(AnyOf([IntegerType, FloatType, DerivedType, ArrayType]))      
+    var_name : ParameterDef[StringAttr]
+    type : ParameterDef[AnyOf([NamedType, DerivedType, ArrayType])]
     
 @irdl_attr_definition
-class EmptyToken(ParametrizedAttribute):
+class EmptyToken(EmptyAttr):
     name = "psy.ir.emptytoken"    
                 
 @irdl_op_definition
@@ -519,11 +509,10 @@ class psyIR:
     def __post_init__(self):
         self.ctx.register_attr(FloatAttr)
         self.ctx.register_attr(BoolAttr)
-        self.ctx.register_attr(AnonymousAttr)        
+        self.ctx.register_attr(AnonymousAttr)
+        self.ctx.register_attr(EmptyAttr)
         self.ctx.register_attr(DerivedType)
-        self.ctx.register_attr(IntegerType)
-        self.ctx.register_attr(FloatType)
-        self.ctx.register_attr(DoublePrecisionType)        
+        self.ctx.register_attr(NamedType)        
         self.ctx.register_attr(ArrayType)
         self.ctx.register_attr(Token)
         self.ctx.register_attr(EmptyToken)
