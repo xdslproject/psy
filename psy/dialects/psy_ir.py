@@ -214,6 +214,9 @@ class Routine(Operation):
             # We don't verify nested operations since they might have already been verified
             res.verify(verify_nested_ops=False)
         return res
+        
+    def isFunction():
+      return not isinstance(attributes["return_var"], EmptyToken)
 
     def verify_(self) -> None:
       pass
@@ -522,6 +525,8 @@ class psyIR:
         self.ctx.register_attr(FloatType)
         self.ctx.register_attr(DoublePrecisionType)        
         self.ctx.register_attr(ArrayType)
+        self.ctx.register_attr(Token)
+        self.ctx.register_attr(EmptyToken)
         
         self.ctx.register_op(FileContainer)
         self.ctx.register_op(Container)
@@ -536,7 +541,8 @@ class psyIR:
         self.ctx.register_op(ExprName)
         self.ctx.register_op(ArrayAccess)
         self.ctx.register_op(MemberAccess)
-        self.ctx.register_op(BinaryExpr)        
+        self.ctx.register_op(BinaryOperation)
+        self.ctx.register_op(UnaryOperation)
         self.ctx.register_op(CallExpr)        
 
     @staticmethod
