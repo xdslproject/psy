@@ -147,7 +147,8 @@ class Container(Operation):
             routines: List[Operation],
             verify_op: bool = True) -> Container:
       res = Container.build(attributes={"container_name": container_name, "default_visibility": default_visibility, "is_program": False,
-                                        "public_routines": public_routines, "private_routines": private_routines}, regions=[imports, routines])
+                                        "public_routines": ArrayAttr.from_list(public_routines), "private_routines": ArrayAttr.from_list(private_routines)}, 
+                                        regions=[imports, routines])
       if verify_op:
         res.verify(verify_nested_ops=False)
       return res
@@ -166,7 +167,7 @@ class Import(Operation):
     def get(import_name: str,
             specific_procedures: List[str],
             verify_op: bool = True) -> Container:
-      res = Import.build(attributes={"import_name": import_name, "specific_procedures": specific_procedures})
+      res = Import.build(attributes={"import_name": import_name, "specific_procedures": ArrayAttr.from_list(specific_procedures)})
       if verify_op:
         res.verify(verify_nested_ops=False)
       return res
@@ -197,7 +198,7 @@ class Routine(Operation):
             verify_op: bool = True) -> Routine:
         if return_var is None:
           return_var=EmptyToken()
-        res = Routine.build(attributes={"routine_name": routine_name, "return_var": return_var, "args": args, "is_program": is_program},
+        res = Routine.build(attributes={"routine_name": routine_name, "return_var": return_var, "args": ArrayAttr.from_list(args), "is_program": is_program},
                             regions=[imports, local_var_declarations, routine_body])
         if verify_op:
             # We don't verify nested operations since they might have already been verified
@@ -230,17 +231,17 @@ class FloatAttr(Data[float]):
         return FloatAttr(val)
       
 @irdl_op_definition
-class ArrayAccess(Operation):
-    name="psy.ir..array_access_expr"
+class ArrayReference(Operation):
+    name="psy.ir.array_reference"
     
-    var = SingleBlockRegionDef()
+    var = AttributeDef(AnyAttr())
     accessors = SingleBlockRegionDef()
     
     @staticmethod
-    def get(var: StringAttr, 
+    def get(var, 
             accessors: List[Operation], 
             verify_op: bool = True) -> ExprName:
-        res = ArrayAccess.build(regions=[var, accessors])
+        res = ArrayReference.build(attributes={"var": var}, regions=[accessors])
         if verify_op:
             # We don't verify nested operations since they might have already been verified
             res.verify(verify_nested_ops=False)
@@ -261,17 +262,24 @@ class ExprName(Operation):
             # We don't verify nested operations since they might have already been verified
             res.verify(verify_nested_ops=False)
         return res
+        
+@irdl_attr_definition
+class StructureMember(ParametrizedAttribute):
+  name = "psy.ir.structure_member"
+  
+  member_name : ParameterDef[StringAttr]
+  children : ParameterDef[AnyOf([AnyAttr(), EmptyAttr])]
       
 @irdl_op_definition
-class MemberAccess(Operation):
-    name = "psy.ir.member_access_expr"    
+class StructureReference(Operation):
+    name = "psy.ir.structure_reference"
 
     var = AttributeDef(AnyAttr())
-    member = SingleBlockRegionDef()
+    member = AttributeDef(AnyAttr())
     
     @staticmethod
     def get(var, member: Union[str, StringAttr], verify_op: bool = True) -> ExprName:
-        res = MemberAccess.build(attributes={"var": var}, regions=[[member]])
+        res = StructureReference.build(attributes={"var": var, "member": member})
         if verify_op:
             # We don't verify nested operations since they might have already been verified
             res.verify(verify_nested_ops=False)
@@ -516,6 +524,7 @@ class psyIR:
         self.ctx.register_attr(ArrayType)
         self.ctx.register_attr(Token)
         self.ctx.register_attr(EmptyToken)
+        self.ctx.register_attr(StructureMember)
         
         self.ctx.register_op(FileContainer)
         self.ctx.register_op(Container)
@@ -528,8 +537,8 @@ class psyIR:
         self.ctx.register_op(Loop)
         self.ctx.register_op(Literal)
         self.ctx.register_op(ExprName)
-        self.ctx.register_op(ArrayAccess)
-        self.ctx.register_op(MemberAccess)
+        self.ctx.register_op(ArrayReference)
+        self.ctx.register_op(StructureReference)
         self.ctx.register_op(BinaryOperation)
         self.ctx.register_op(UnaryOperation)
         self.ctx.register_op(CallExpr)        
