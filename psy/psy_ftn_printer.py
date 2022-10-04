@@ -56,10 +56,10 @@ class FortranPrinter():
       self.print_do(op)
     elif isinstance(op, psy_ir.Import):
       self.print_import(op)
-    elif isinstance(op, psy_ir.MemberAccess):
-      self.print_memberaccess(op)
-    elif isinstance(op, psy_ir.ArrayAccess):
-      self.print_arrayaccess(op)
+    elif isinstance(op, psy_ir.StructureReference):
+      self.print_structurereference(op)
+    elif isinstance(op, psy_ir.ArrayReference):
+      self.print_arrayreference(op)
     elif isinstance(op, psy_ir.Return):
       self.print_indent()
       print("return")
@@ -91,8 +91,8 @@ class FortranPrinter():
     else:
       raise Exception(f"Unknown unary operation {op.attributes['op'].data}")
         
-  def print_arrayaccess(self, op):
-    self.print_op(op.var.blocks[0].ops[0])
+  def print_arrayreference(self, op):
+    self.print_token_identifier(op.var)
     print("(", end="")
     needs_comma=False
     for member in op.accessors.blocks[0].ops:
@@ -114,10 +114,13 @@ class FortranPrinter():
     print(")", end="")
     if self.inside_expr==0: print("") 
         
-  def print_memberaccess(self, op):
+  def print_structurereference(self, op):
     print(f"{op.var.var_name.data}", end="")
-    for member in op.fields.data:
-      print(f"%{member.data}", end="")
+    self.print_structuremember(op.member)
+      
+  def print_structuremember(self, member):
+    print(f"%{member.member_name.data}", end="")
+    if not isinstance(member.children, psy_ir.EmptyAttr): self.print_structuremember(member.children)
         
   def print_import(self, op):
     print(f"use {op.import_name.data}", end="")
@@ -267,7 +270,7 @@ class FortranPrinter():
         print("subroutine", end="")
       print(f" {op.routine_name.data}(", end="")      
       for index, arg in enumerate(op.args.data):
-        if (index > 0): print(", ", end="")
+        if (index > 0): print(", ", end="")        
         print(arg.var_name.data, end="")
       print(")", end="")
       if op.isFunction():
