@@ -34,7 +34,36 @@ class SSAValueCtx:
             raise Exception()
         else:
             self.dictionary[identifier] = ssa_value
-
+            
+class ProgramState:
+  def __init__(self):
+    self.module_name=None
+    self.routine_name=None
+  
+  def setRoutineName(self, routine_name):
+    self.routine_name=routine_name
+    
+  def unsetRoutineName(self):
+    self.routine_name=None
+  
+  def getRoutineName(self):
+    return self.routine_name
+    
+  def isInRoutine(self):
+    return self.routine_name is not None
+    
+  def setModuleName(self, module_name):
+    self.module_name=module_name
+    
+  def unsetModuleName(self):
+    self.module_name=None
+  
+  def getModuleName(self):
+    return self.module_name
+    
+  def isInModule(self):
+    return self.module_name is not None
+    
 
 def psy_ir_to_fir(ctx: MLContext, input_module: ModuleOp):
     res_module = translate_program(input_module)    
@@ -63,15 +92,18 @@ def translate_container(ctx: SSAValueCtx, op: Operation) -> Operation:
   if isinstance(op, psy_ir.Container):    
     body = Region()
     block = Block()
-    block.add_ops(translate_fun_def(ctx, routine) for routine in op.routines.blocks[0].ops)
+    program_state = ProgramState()
+    program_state.setModuleName(op.attributes["container_name"].data)
+    block.add_ops(translate_fun_def(ctx, routine, program_state) for routine in op.routines.blocks[0].ops)
 
     body.add_block(block)    
     return body
-  elif isinstance(op, psy_ir.Routine):    
-    return translate_fun_def(ctx, op)    
+  elif isinstance(op, psy_ir.Routine):  
+    program_state = ProgramState()  
+    return translate_fun_def(ctx, op, program_state)    
     
 def translate_fun_def(ctx: SSAValueCtx,
-                      routine_def: psy_ir.Routine) -> Operation:
+                      routine_def: psy_ir.Routine, program_state : ProgramState) -> Operation:
     routine_name = routine_def.attributes["routine_name"]
 
     def get_param(op: Operation) -> Tuple[str, Attribute]:
@@ -105,28 +137,44 @@ def translate_fun_def(ctx: SSAValueCtx,
     #   ]))
     
     to_add=[]
+    program_state.setRoutineName(routine_name.data)
     for op in routine_def.local_var_declarations.blocks[0].ops:
-      res=translate_def_or_stmt(ctx, op) # should be SSAValueCtx created above for routine
+      res=translate_def_or_stmt(ctx, op, program_state) # should be SSAValueCtx created above for routine
       if res is not None:
         to_add.append(res)
         
     for op in routine_def.routine_body.blocks[0].ops:
-      res=translate_def_or_stmt(ctx, op) # should be SSAValueCtx created above for routine
+      res=translate_def_or_stmt(ctx, op, program_state) # should be SSAValueCtx created above for routine
       if res is not None:        
         to_add.append(res)
         
+    program_state.unsetRoutineName()
     block.add_ops(flatten(to_add))
     body.add_block(block)
-
-    return func.FuncOp.from_region(routine_name, [], [], body)   
     
-def translate_def_or_stmt(ctx: SSAValueCtx, op: Operation) -> List[Operation]:
+    full_name=generateProcedureSymName(program_state, routine_name.data)
+
+    return func.FuncOp.from_region(full_name, [], [], body)   
+    
+def generateProcedureSymName(program_state : ProgramState, routine_name:str):
+  return generateProcedurePrefix(program_state, routine_name, "P")
+      
+def generateProcedurePrefix(program_state : ProgramState, routine_name:str, procedure_identifier:str):
+  if program_state.isInModule():
+    return "_QM"+program_state.getModuleName().lower()+procedure_identifier+routine_name.lower()
+  else:
+    return "_QQ"+routine_name.lower()
+      
+def generateVariableUniqueName(program_state : ProgramState, var_name:str):
+  return generateProcedurePrefix(program_state, program_state.getRoutineName(), "F")+"E"+var_name
+    
+def translate_def_or_stmt(ctx: SSAValueCtx, op: Operation, program_state : ProgramState) -> List[Operation]:
     """
     Translate an operation that can either be a definition or statement
     """
     # first try to translate op as a definition:
     #   if op is a definition this will return a list of translated Operations
-    ops = try_translate_def(ctx, op)
+    ops = try_translate_def(ctx, op, program_state)
     if ops is not None:
         return ops
     # op has not been a definition, try to translate op as a statement:
@@ -140,7 +188,7 @@ def translate_def_or_stmt(ctx: SSAValueCtx, op: Operation) -> List[Operation]:
 
 
 def try_translate_def(ctx: SSAValueCtx,
-                      op: Operation) -> Optional[List[Operation]]:
+                      op: Operation, program_state : ProgramState) -> Optional[List[Operation]]:
     """
     Tries to translate op as a definition.
     Returns a list of the translated Operations if op is a definition, returns None otherwise.
@@ -148,12 +196,12 @@ def try_translate_def(ctx: SSAValueCtx,
     #if isinstance(op, psy_ast.Routine):
     #    return [translate_fun_def(ctx, op)]    
     if isinstance(op, psy_ir.VarDef):
-        return translate_var_def(ctx, op)
+        return translate_var_def(ctx, op, program_state)
     else:
         return None
         
 def translate_var_def(ctx: SSAValueCtx,
-                      var_def: psy_ast.VarDef) -> List[Operation]:
+                      var_def: psy_ast.VarDef, program_state : ProgramState) -> List[Operation]:
    
     var_name = var_def.var.var_name
     assert isinstance(var_name, StringAttr)
@@ -161,7 +209,9 @@ def translate_var_def(ctx: SSAValueCtx,
     
     ref_type=fir.ReferenceType([type])
 
-    fir_var_def = fir.Alloca.create(attributes={"bindc_name": var_name, "uniq_name": StringAttr("hello"), "in_type":type}, operands=[], result_types=[ref_type])
+    # Operand segment sizes is wrong here, either hack it like trying (but doesn't match!) or understand why missing
+    fir_var_def = fir.Alloca.create(attributes={"bindc_name": var_name, "uniq_name": StringAttr(generateVariableUniqueName(program_state, var_name.data)), 
+      "in_type":type}, operands=[], result_types=[ref_type])
 
     # relate variable identifier and SSA value by adding it into the current context
     ctx[var_name.data] = fir_var_def.results[0]    
