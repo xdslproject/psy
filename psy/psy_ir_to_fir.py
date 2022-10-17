@@ -1,6 +1,7 @@
 from __future__ import annotations
-from xdsl.dialects.builtin import StringAttr, ModuleOp, IntegerAttr, ArrayAttr, i32, f32, FlatSymbolRefAttr
-from xdsl.dialects import func
+from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerType, ArrayAttr, i32, f32, 
+      Float16Type, Float32Type, Float64Type, FlatSymbolRefAttr, FloatAttr)
+from xdsl.dialects import func, arith
 from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext
 from psy.dialects import psy_ir
 
@@ -9,6 +10,10 @@ from ftn.dialects import fir
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Dict
 
+binary_arith_op_matching={"ADD": [arith.Addi, arith.Addf], "SUB":[arith.Subi, arith.Subf], "MUL": [arith.Muli, arith.Mulf], "DIV": [arith.DivSI, arith.Divf], "REM": [arith.RemSI, None], 
+"MIN" : [arith.MinSI, arith.Minf], "MAX" : [arith.MaxSI, arith.Maxf]}
+
+binary_arith_psy_to_arith_comparison_op={"EQ": "eq", "NE": "ne", "GT": "sgt", "LT": "slt", "GE": "sge", "LE": "sle"}
 
 @dataclass
 class SSAValueCtx:
@@ -268,6 +273,14 @@ def translate_var_def(ctx: SSAValueCtx,
     ctx[var_name.data] = fir_var_def.results[0]    
     return [fir_var_def]   
     
+def try_translate_type(op: Operation) -> Optional[Attribute]:
+    """Tries to translate op as a type, returns None otherwise."""    
+    if isinstance(op, psy_ir.NamedType):
+      if op.type_name.data == "integer": return i32
+      if op.type_name.data == "real": return f32
+
+    return None    
+    
 def try_translate_stmt(ctx: SSAValueCtx,
                        op: Operation, program_state : ProgramState) -> Optional[List[Operation]]:
     """
@@ -276,13 +289,53 @@ def try_translate_stmt(ctx: SSAValueCtx,
     Returns None otherwise.
     """
     if isinstance(op, psy_ir.CallExpr):
-      return translate_call_expr_stmt(ctx, op, program_state)    
+      return translate_call_expr_stmt(ctx, op, program_state) 
+    if isinstance(op, psy_ir.Assign):
+      return translate_assign(ctx, op, program_state)
 
     res = None #try_translate_expr(ctx, op)
     if res is None:
         return None
     else:
         return res[0]
+        
+def translate_stmt(ctx: SSAValueCtx, op: Operation, program_state : ProgramState) -> List[Operation]:
+    """
+    Translates op as a statement.
+    If op is an expression, returns a list of the translated Operations.
+    Fails otherwise.
+    """
+    ops = try_translate_stmt(ctx, op, program_state)
+    if ops is None:
+        raise Exception(f"Could not translate `{op}' as a statement")
+    else:
+        return ops        
+        
+def split_multi_assign(
+        assign: psy_ast.Assign) -> Tuple[List[Operation], Operation]:
+    """Get the list of targets of a multi assign, as well as the expression value."""
+    if isinstance(assign.rhs.op, psy_ir.Assign):
+        targets, value = split_multi_assign(assign.rhs.op)
+        return [assign.target.op] + targets, value
+    return [assign.lhs.op], assign.rhs.op        
+        
+def translate_assign(ctx: SSAValueCtx,
+                     assign: psy_ast.Assign, program_state : ProgramState) -> List[Operation]:
+    targets, value = split_multi_assign(assign)
+    value_fir, value_var = translate_expr(ctx, value)        
+
+    translated_targets = [translate_expr(ctx, target) for target in targets]
+    targets_fir = [
+        target_op for target in translated_targets for target_op in target[0]
+    ]    
+    targets_var = [target[1] for target in translated_targets]
+    
+    assigns: List[Operation] = [
+        fir.Store.create(operands=[value_var, target_var])
+        for target_var in targets_var
+    ]      
+    
+    return value_fir + targets_fir + assigns        
         
 def translate_call_expr_stmt(ctx: SSAValueCtx,
                              call_expr: psy_ir.CallExpr, program_state : ProgramState) -> List[Operation]:
@@ -299,26 +352,101 @@ def translate_call_expr_stmt(ctx: SSAValueCtx,
     full_name=generateProcedurePrefixWithModuleName(program_state.getImportModule(name.data), name.data, "P") 
     call = fir.Call.create(attributes={"callee": FlatSymbolRefAttr.from_str(full_name)}, result_types=[])
     ops.append(call)
-    return ops        
-
-
-def translate_stmt(ctx: SSAValueCtx, op: Operation, program_state : ProgramState) -> List[Operation]:
+    return ops
+    
+def translate_expr(ctx: SSAValueCtx,
+                   op: Operation) -> Tuple[List[Operation], SSAValue]:
     """
-    Translates op as a statement.
-    If op is an expression, returns a list of the translated Operations.
+    Translates op as an expression.
+    If op is an expression, returns a list of the translated Operations
+    and the ssa value representing the translated expression.
     Fails otherwise.
     """
-    ops = try_translate_stmt(ctx, op, program_state)
-    if ops is None:
-        raise Exception(f"Could not translate `{op}' as a statement")
+    res = try_translate_expr(ctx, op)
+    if res is None:
+        raise Exception(f"Could not translate `{op}' as an expression")
     else:
-        return ops
-    
-def try_translate_type(op: Operation) -> Optional[Attribute]:
-    """Tries to translate op as a type, returns None otherwise."""    
-    if isinstance(op, psy_ir.NamedType):
-      if op.type_name.data == "integer": return i32
-      if op.type_name.data == "real": return f32
-
-    return None
+        ops, ssa_value = res
+        return ops, ssa_value
   
+def try_translate_expr(
+        ctx: SSAValueCtx,
+        op: Operation) -> Optional[Tuple[List[Operation], SSAValue]]:
+    """
+    Tries to translate op as an expression.
+    If op is an expression, returns a list of the translated Operations
+    and the ssa value representing the translated expression.
+    Returns None otherwise.
+    """
+    if isinstance(op, psy_ir.Literal):
+      op = translate_literal(op)
+      return [op], op.results[0]
+    if isinstance(op, psy_ir.ExprName):
+      ssa_value = ctx[op.id.data]
+      assert isinstance(ssa_value, SSAValue)
+      return [], ssa_value    
+    if isinstance(op, psy_ir.BinaryOperation):
+      return translate_binary_expr(ctx, op)
+    #    return translate_binary_expr(ctx, op)
+    #if isinstance(op, psy_ast.CallExpr):
+    #    print("No call expression here!")
+    #    return translate_call_expr(ctx, op)
+    
+    assert False, "Unknown Expression"
+    
+def translate_binary_expr(
+        ctx: SSAValueCtx,
+        binary_expr: psy_ast.BinaryExpr) -> Tuple[List[Operation], SSAValue]:
+    lhs, lhs_ssa_value = translate_expr(ctx, binary_expr.lhs.blocks[0].ops[0])
+    rhs, rhs_ssa_value = translate_expr(ctx, binary_expr.rhs.blocks[0].ops[0])
+    result_type = rhs_ssa_value.typ
+    if binary_expr.op.data != "is":
+        assert lhs_ssa_value.typ == rhs_ssa_value.typ
+
+    if binary_expr.op.data in ['!=', '==', '<', '<=', '>', '>=', 'is']:
+        result_type = psy_type.bool_type
+
+    attr = binary_expr.op
+    assert isinstance(attr, Attribute)
+
+    # Need to consider special case when the binary operation has a different execution order for and & or?
+    
+    fir_binary_expr=get_arith_instance(binary_expr.op.data, lhs_ssa_value, rhs_ssa_value)    
+    
+    return lhs + rhs + [fir_binary_expr], fir_binary_expr.results[0] 
+    
+def get_arith_instance(operation:str, lhs, rhs):
+  operand_type = lhs.typ
+  if operation in binary_arith_op_matching:    
+    if isinstance(operand_type, IntegerType): index=0
+    if isinstance(operand_type, Float16Type) or isinstance(operand_type, Float32Type) or isinstance(operand_type, Float64Type): index=1
+    op_instance=binary_arith_op_matching[operation][index]
+    assert op_instance is not None, "Operation "+operation+" not implemented for type"
+    return op_instance.get(lhs, rhs)
+    
+  if (operation == "AND"): 
+    assert isinstance(operand_type, IntegerType), "Integer type only supported for 'and'"
+    return arith.AndI.get(lhs, rhs)
+  if (operation == "OR"): 
+    assert isinstance(operand_type, IntegerType), "Integer type only supported for 'or'"
+    return arith.OrI.get(lhs, rhs)
+    
+  if operation in binary_arith_psy_to_arith_comparison_op:    
+    return arith.Cmpi.from_mnemonic(lhs, rhs, binary_arith_psy_to_arith_comparison_op[operation])
+    
+def translate_literal(op: psy_ir.Literal) -> Operation:
+    value = op.attributes["value"]      
+
+    if isinstance(value, IntegerAttr):
+        return arith.Constant.create(attributes={"value": value},
+                                         result_types=[i32])  
+        
+    if isinstance(value, psy_ir.FloatAttr):        
+        return arith.Constant.create(attributes={"value": FloatAttr.from_value(value.data)},
+                                         result_types=[f32])  
+
+    if isinstance(value, StringAttr):
+        return arith.Constant.create(attributes={"value": value},
+                                         result_types=[i32]) # Need to replace with string type!
+    
+    raise Exception(f"Could not translate `{op}' as a literal")    
