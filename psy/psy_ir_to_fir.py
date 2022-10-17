@@ -2,7 +2,7 @@ from __future__ import annotations
 from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerType, ArrayAttr, i32, f32, 
       Float16Type, Float32Type, Float64Type, FlatSymbolRefAttr, FloatAttr)
 from xdsl.dialects import func, arith
-from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext
+from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext, ErasedSSAValue
 from psy.dialects import psy_ir
 
 from util.list_ops import flatten
@@ -292,6 +292,8 @@ def try_translate_stmt(ctx: SSAValueCtx,
       return translate_call_expr_stmt(ctx, op, program_state) 
     if isinstance(op, psy_ir.Assign):
       return translate_assign(ctx, op, program_state)
+    if isinstance(op, psy_ir.IfBlock):
+      return translate_if(ctx, op, program_state)
 
     res = None #try_translate_expr(ctx, op)
     if res is None:
@@ -309,7 +311,27 @@ def translate_stmt(ctx: SSAValueCtx, op: Operation, program_state : ProgramState
     if ops is None:
         raise Exception(f"Could not translate `{op}' as a statement")
     else:
-        return ops        
+        return ops
+        
+def translate_if(ctx: SSAValueCtx, if_stmt: psy_ir.If, program_state : ProgramState) -> List[Operation]:
+    cond, cond_name = translate_expr(ctx, if_stmt.cond.blocks[0].ops[0])
+
+    ops: List[Operation] = []
+    for op in if_stmt.then.blocks[0].ops:
+        stmt_ops = translate_stmt(ctx, op, program_state)
+        ops += stmt_ops
+    ops.append(fir.Result.create())
+    then = Region.from_operation_list(ops)
+
+    ops: List[Operation] = []
+    for op in if_stmt.orelse.blocks[0].ops:
+        stmt_ops = translate_stmt(ctx, op, program_state)
+        ops += stmt_ops
+    ops.append(fir.Result.create())
+    orelse = Region.from_operation_list(ops)
+
+    new_op = fir.If.create(operands=[cond_name], regions=[then, orelse]) 
+    return cond + [new_op]
         
 def split_multi_assign(
         assign: psy_ast.Assign) -> Tuple[List[Operation], Operation]:
@@ -323,8 +345,9 @@ def translate_assign(ctx: SSAValueCtx,
                      assign: psy_ast.Assign, program_state : ProgramState) -> List[Operation]:
     targets, value = split_multi_assign(assign)
     value_fir, value_var = translate_expr(ctx, value)        
-
-    translated_targets = [translate_expr(ctx, target) for target in targets]
+    
+    # The targets of the assignment are references and not expressions, so grab from the ctx
+    translated_targets = [([], ctx[target.id.data]) for target in targets]    
     targets_fir = [
         target_op for target in translated_targets for target_op in target[0]
     ]    
@@ -384,7 +407,15 @@ def try_translate_expr(
     if isinstance(op, psy_ir.ExprName):
       ssa_value = ctx[op.id.data]
       assert isinstance(ssa_value, SSAValue)
-      return [], ssa_value    
+      # We are limited here with type handling, need other floats - maybe a better way of doing this?
+      if isinstance(ssa_value.typ.type, IntegerType):
+        result_type=i32
+      elif isinstance(ssa_value.typ.type, Float32Type):
+        result_type=f32      
+      
+      op=fir.Load.create(operands=[ssa_value], result_types=[result_type])
+      
+      return [op], op.results[0]
     if isinstance(op, psy_ir.BinaryOperation):
       return translate_binary_expr(ctx, op)
     #    return translate_binary_expr(ctx, op)
@@ -399,12 +430,10 @@ def translate_binary_expr(
         binary_expr: psy_ast.BinaryExpr) -> Tuple[List[Operation], SSAValue]:
     lhs, lhs_ssa_value = translate_expr(ctx, binary_expr.lhs.blocks[0].ops[0])
     rhs, rhs_ssa_value = translate_expr(ctx, binary_expr.rhs.blocks[0].ops[0])
-    result_type = rhs_ssa_value.typ
-    if binary_expr.op.data != "is":
-        assert lhs_ssa_value.typ == rhs_ssa_value.typ
-
-    if binary_expr.op.data in ['!=', '==', '<', '<=', '>', '>=', 'is']:
-        result_type = psy_type.bool_type
+    result_type = lhs_ssa_value.typ
+        
+    assert (lhs_ssa_value.typ == rhs_ssa_value.typ) or isinstance(lhs_ssa_value.typ, fir.ReferenceType) or isinstance(rhs_ssa_value.typ, fir.ReferenceType)
+    
 
     attr = binary_expr.op
     assert isinstance(attr, Attribute)
