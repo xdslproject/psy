@@ -2,7 +2,7 @@ from __future__ import annotations
 from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerType, ArrayAttr, i32, f32, 
       Float16Type, Float32Type, Float64Type, FlatSymbolRefAttr, FloatAttr)
 from xdsl.dialects import func, arith
-from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext, ErasedSSAValue
+from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext
 from psy.dialects import psy_ir
 
 from util.list_ops import flatten
@@ -89,29 +89,13 @@ def psy_ir_to_fir(ctx: MLContext, input_module: ModuleOp):
     #applyModuleUseToFloatingRegions(res_module, collectContainerNames(res_module))
     res_module.regions[0].move_blocks(input_module.regions[0])
     # Create program entry point
-    wrap_top_levelcall_from_main(ctx, input_module)
+    check_program_entry_point(input_module)
     
-def wrap_top_levelcall_from_main(ctx: MLContext, module: ModuleOp):
-  found_routine=find_floating_region(module)
-  assert found_routine is not None
-  
-  body = Region()
-  block = Block()
-  
-  callexpr = fir.Call.create(attributes={"callee": FlatSymbolRefAttr.from_str(found_routine.sym_name.data)}, result_types=[])  
-  # A return is always needed at the end of the procedure
-  block.add_ops([callexpr, func.Return.create()])
-  body.add_block(block)
-  main = func.FuncOp.from_region("_QQmain", [], [], body)
-  # Need to set sym_visibility here so the main function appears in Flang generated output
-  main.attributes["sym_visibility"]=StringAttr("public")
-  module.regions[0].blocks[0].add_ops([main])
-  
-def find_floating_region(module: ModuleOp):
+def check_program_entry_point(module: ModuleOp):
   for op in module.ops:
     if isinstance(op, func.FuncOp):
-      if op.sym_name.data.startswith("_QQ"): return op      
-  return None  
+      if op.sym_name.data=="_QQmain": return
+  assert False, "No program entry point"
 
 def translate_program(input_module: ModuleOp) -> ModuleOp:
     # create an empty global context
@@ -202,9 +186,16 @@ def translate_fun_def(ctx: SSAValueCtx,
     block.add_ops(flatten(to_add))
     body.add_block(block)
     
-    full_name=generateProcedureSymName(program_state, routine_name.data)
+    if routine_def.is_program.data:
+      full_name="_QQmain"
+    else:
+      full_name=generateProcedureSymName(program_state, routine_name.data)
 
-    return func.FuncOp.from_region(full_name, [], [], body)
+    function_fir=func.FuncOp.from_region(full_name, [], [], body)
+    #TODO - need to correlate against public routines to mark private or public!
+    if routine_def.is_program.data:
+      function_fir.attributes["sym_visibility"]=StringAttr("public")
+    return function_fir
     
 def generateProcedureSymName(program_state : ProgramState, routine_name:str):
   return generateProcedurePrefix(program_state, routine_name, "P")
