@@ -1,5 +1,5 @@
 from __future__ import annotations
-from xdsl.dialects.builtin import StringAttr, ModuleOp, IntegerAttr, ArrayAttr, i32, f32
+from xdsl.dialects.builtin import StringAttr, ModuleOp, IntegerAttr, ArrayAttr, i32, f32, FlatSymbolRefAttr
 from xdsl.dialects import func
 from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext
 from psy.dialects import psy_ir
@@ -39,6 +39,7 @@ class ProgramState:
   def __init__(self):
     self.module_name=None
     self.routine_name=None
+    self.imports={}
   
   def setRoutineName(self, routine_name):
     self.routine_name=routine_name
@@ -64,43 +65,74 @@ class ProgramState:
   def isInModule(self):
     return self.module_name is not None
     
+  def addImport(self, container_name, routine_name):
+    self.imports[routine_name]=container_name
+    
+  def hasImport(self, routine_name):
+    return routine_name in self.imports
+    
+  def getImportModule(self, routine_name):
+    return self.imports[routine_name]
+    
+  def clearImports(self):
+    self.imports.clear()
+    
 
 def psy_ir_to_fir(ctx: MLContext, input_module: ModuleOp):
-    res_module = translate_program(input_module)    
+    res_module = translate_program(input_module)        
     # Now we need to gather the containers and inform the top level routine about these so it can generate the use
     #applyModuleUseToFloatingRegions(res_module, collectContainerNames(res_module))
     res_module.regions[0].move_blocks(input_module.regions[0])
     # Create program entry point
-    #wrap_top_levelcall_from_main(ctx, input_module)
+    wrap_top_levelcall_from_main(ctx, input_module)
+    
+def wrap_top_levelcall_from_main(ctx: MLContext, module: ModuleOp):
+  found_routine=find_floating_region(module)
+  assert found_routine is not None
+  
+  body = Region()
+  block = Block()
+  
+  callexpr = fir.Call.create(attributes={"callee": FlatSymbolRefAttr.from_str(found_routine.sym_name.data)}, result_types=[])
+  block.add_ops([callexpr])
+  body.add_block(block)
+  main = func.FuncOp.from_region("_QQmain", [], [], body)
+  module.regions[0].blocks[0].add_ops([main])
+  
+def find_floating_region(module: ModuleOp):
+  for op in module.ops:
+    if isinstance(op, func.FuncOp):
+      if op.sym_name.data.startswith("_QQ"): return op      
+  return None  
 
 def translate_program(input_module: ModuleOp) -> ModuleOp:
     # create an empty global context
     global_ctx = SSAValueCtx()
     containers: List[func.FuncOp] = []
+    body = Region()
+    block = Block()
     for top_level_entry in input_module.ops:
-      if isinstance(top_level_entry, psy_ir.FileContainer):        
-       pass #containers.extend([translate_container(global_ctx, container) for container in top_level_entry.children.blocks[0].ops])
-        
+      if isinstance(top_level_entry, psy_ir.FileContainer):                   
+        for container in top_level_entry.children.blocks[0].ops:
+          translate_container(global_ctx, container, block)         
         
       elif isinstance(top_level_entry, psy_ir.Container):        
         print("NOT IMPLEMENTED")
         #containers.append(translate_container(global_ctx, top_level_entry))      
-                
-    return ModuleOp.from_region_or_ops(translate_container(global_ctx, top_level_entry.children.blocks[0].ops[0]))
+          
+    body.add_block(block)
+    return ModuleOp.from_region_or_ops(body)
     
-def translate_container(ctx: SSAValueCtx, op: Operation) -> Operation:  
-  if isinstance(op, psy_ir.Container):    
-    body = Region()
-    block = Block()
+def translate_container(ctx: SSAValueCtx, op: Operation, block) -> Operation:  
+  if isinstance(op, psy_ir.Container):        
     program_state = ProgramState()
     program_state.setModuleName(op.attributes["container_name"].data)
-    block.add_ops(translate_fun_def(ctx, routine, program_state) for routine in op.routines.blocks[0].ops)
-
-    body.add_block(block)    
-    return body
-  elif isinstance(op, psy_ir.Routine):  
+    
+    block.add_ops(translate_fun_def(ctx, routine, program_state) for routine in op.routines.blocks[0].ops)    
+  elif isinstance(op, psy_ir.Routine):
     program_state = ProgramState()  
-    return translate_fun_def(ctx, op, program_state)    
+   
+    block.add_op(translate_fun_def(ctx, op, program_state))
     
 def translate_fun_def(ctx: SSAValueCtx,
                       routine_def: psy_ir.Routine, program_state : ProgramState) -> Operation:
@@ -136,6 +168,12 @@ def translate_fun_def(ctx: SSAValueCtx,
     #        for op in routine_def.local_var_declarations.blocks[0].ops
     #   ]))
     
+    for import_statement in routine_def.imports.blocks[0].ops:
+      assert isinstance(import_statement, psy_ir.Import)
+      module_name=import_statement.import_name.data
+      for fn in import_statement.specific_procedures.data:
+        program_state.addImport(module_name, fn.data)
+    
     to_add=[]
     program_state.setRoutineName(routine_name.data)
     for op in routine_def.local_var_declarations.blocks[0].ops:
@@ -149,19 +187,26 @@ def translate_fun_def(ctx: SSAValueCtx,
         to_add.append(res)
         
     program_state.unsetRoutineName()
+    program_state.clearImports()
     block.add_ops(flatten(to_add))
     body.add_block(block)
     
     full_name=generateProcedureSymName(program_state, routine_name.data)
 
-    return func.FuncOp.from_region(full_name, [], [], body)   
+    return func.FuncOp.from_region(full_name, [], [], body)
     
 def generateProcedureSymName(program_state : ProgramState, routine_name:str):
   return generateProcedurePrefix(program_state, routine_name, "P")
       
-def generateProcedurePrefix(program_state : ProgramState, routine_name:str, procedure_identifier:str):
+def generateProcedurePrefix(program_state : ProgramState, routine_name:str, procedure_identifier:str):  
   if program_state.isInModule():
-    return "_QM"+program_state.getModuleName().lower()+procedure_identifier+routine_name.lower()
+    return generateProcedurePrefixWithModuleName(program_state.getModuleName(), routine_name, procedure_identifier)
+  else:
+    return generateProcedurePrefixWithModuleName(None, routine_name, procedure_identifier)  
+    
+def generateProcedurePrefixWithModuleName(module_name:str, routine_name:str, procedure_identifier:str):
+  if module_name is not None:
+    return "_QM"+module_name.lower()+procedure_identifier+routine_name.lower()
   else:
     return "_QQ"+routine_name.lower()
       
@@ -179,9 +224,9 @@ def translate_def_or_stmt(ctx: SSAValueCtx, op: Operation, program_state : Progr
         return ops
     # op has not been a definition, try to translate op as a statement:
     #   if op is a statement this will return a list of translated Operations
-    #ops = try_translate_stmt(ctx, op)
-    #if ops is not None:
-    #    return ops
+    ops = try_translate_stmt(ctx, op, program_state)
+    if ops is not None:
+        return ops
     # operation must have been translated by now
     return None
     raise Exception(f"Could not translate `{op}' as a definition or statement")
@@ -215,7 +260,53 @@ def translate_var_def(ctx: SSAValueCtx,
 
     # relate variable identifier and SSA value by adding it into the current context
     ctx[var_name.data] = fir_var_def.results[0]    
-    return [fir_var_def]     
+    return [fir_var_def]   
+    
+def try_translate_stmt(ctx: SSAValueCtx,
+                       op: Operation, program_state : ProgramState) -> Optional[List[Operation]]:
+    """
+    Tries to translate op as a statement.
+    If op is an expression, returns a list of the translated Operations.
+    Returns None otherwise.
+    """
+    if isinstance(op, psy_ir.CallExpr):
+      return translate_call_expr_stmt(ctx, op, program_state)    
+
+    res = None #try_translate_expr(ctx, op)
+    if res is None:
+        return None
+    else:
+        return res[0]
+        
+def translate_call_expr_stmt(ctx: SSAValueCtx,
+                             call_expr: psy_ir.CallExpr, program_state : ProgramState) -> List[Operation]:
+    ops: List[Operation] = []
+    args: List[SSAValue] = []
+
+    #for arg in call_expr.args.blocks[0].ops:
+    #    op, arg = translate_expr(ctx, arg)
+    #    ops += op
+    #    args.append(arg)      
+
+    name = call_expr.attributes["func"]        
+    assert program_state.hasImport(name.data)
+    full_name=generateProcedurePrefixWithModuleName(program_state.getImportModule(name.data), name.data, "P") 
+    call = fir.Call.create(attributes={"callee": FlatSymbolRefAttr.from_str(full_name)}, result_types=[])
+    ops.append(call)
+    return ops        
+
+
+def translate_stmt(ctx: SSAValueCtx, op: Operation, program_state : ProgramState) -> List[Operation]:
+    """
+    Translates op as a statement.
+    If op is an expression, returns a list of the translated Operations.
+    Fails otherwise.
+    """
+    ops = try_translate_stmt(ctx, op, program_state)
+    if ops is None:
+        raise Exception(f"Could not translate `{op}' as a statement")
+    else:
+        return ops
     
 def try_translate_type(op: Operation) -> Optional[Attribute]:
     """Tries to translate op as a type, returns None otherwise."""    
