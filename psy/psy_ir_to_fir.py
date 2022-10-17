@@ -93,10 +93,13 @@ def wrap_top_levelcall_from_main(ctx: MLContext, module: ModuleOp):
   body = Region()
   block = Block()
   
-  callexpr = fir.Call.create(attributes={"callee": FlatSymbolRefAttr.from_str(found_routine.sym_name.data)}, result_types=[])
-  block.add_ops([callexpr])
+  callexpr = fir.Call.create(attributes={"callee": FlatSymbolRefAttr.from_str(found_routine.sym_name.data)}, result_types=[])  
+  # A return is always needed at the end of the procedure
+  block.add_ops([callexpr, func.Return.create()])
   body.add_block(block)
   main = func.FuncOp.from_region("_QQmain", [], [], body)
+  # Need to set sym_visibility here so the main function appears in Flang generated output
+  main.attributes["sym_visibility"]=StringAttr("public")
   module.regions[0].blocks[0].add_ops([main])
   
 def find_floating_region(module: ModuleOp):
@@ -185,6 +188,9 @@ def translate_fun_def(ctx: SSAValueCtx,
       res=translate_def_or_stmt(ctx, op, program_state) # should be SSAValueCtx created above for routine
       if res is not None:        
         to_add.append(res)
+        
+    # A return is always needed at the end of the procedure
+    to_add.append([func.Return.create()])
         
     program_state.unsetRoutineName()
     program_state.clearImports()
@@ -288,7 +294,7 @@ def translate_call_expr_stmt(ctx: SSAValueCtx,
     #    ops += op
     #    args.append(arg)      
 
-    name = call_expr.attributes["func"]        
+    name = call_expr.attributes["func"]
     assert program_state.hasImport(name.data)
     full_name=generateProcedurePrefixWithModuleName(program_state.getImportModule(name.data), name.data, "P") 
     call = fir.Call.create(attributes={"callee": FlatSymbolRefAttr.from_str(full_name)}, result_types=[])
