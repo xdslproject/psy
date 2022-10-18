@@ -35,7 +35,7 @@ class SSAValueCtx:
 
     def __setitem__(self, identifier: str, ssa_value: SSAValue):
         """Relate the given identifier and SSA value in the current scope"""
-        if identifier in self.dictionary:
+        if identifier in self.dictionary:            
             raise Exception()
         else:
             self.dictionary[identifier] = ssa_value
@@ -149,10 +149,12 @@ def translate_fun_def(ctx: SSAValueCtx,
 
     body = Region()
     block = Block()
-    # create a new nested scope and
-    # relate parameter identifiers with SSA values of block arguments
-    #c = SSAValueCtx(dictionary=dict(zip(param_names, block.args)),
-    #                parent_scope=ctx)
+    
+    # Create a new nested scope and relate parameter identifiers with SSA values of block arguments
+    # For now create this empty, will add in support for arguments later on!
+    c = SSAValueCtx(dictionary=dict(), #zip(param_names, block.args)),
+                    parent_scope=ctx)
+                    
     # use the nested scope when translate the body of the function
     #block.add_ops(
     #    flatten([
@@ -169,12 +171,12 @@ def translate_fun_def(ctx: SSAValueCtx,
     to_add=[]
     program_state.setRoutineName(routine_name.data)
     for op in routine_def.local_var_declarations.blocks[0].ops:
-      res=translate_def_or_stmt(ctx, op, program_state) # should be SSAValueCtx created above for routine
+      res=translate_def_or_stmt(c, op, program_state) # should be SSAValueCtx created above for routine
       if res is not None:
         to_add.append(res)
         
     for op in routine_def.routine_body.blocks[0].ops:
-      res=translate_def_or_stmt(ctx, op, program_state) # should be SSAValueCtx created above for routine
+      res=translate_def_or_stmt(c, op, program_state) # should be SSAValueCtx created above for routine
       if res is not None:        
         to_add.append(res)
         
@@ -305,7 +307,7 @@ def translate_stmt(ctx: SSAValueCtx, op: Operation, program_state : ProgramState
         return ops
         
 def translate_if(ctx: SSAValueCtx, if_stmt: psy_ir.If, program_state : ProgramState) -> List[Operation]:
-    cond, cond_name = translate_expr(ctx, if_stmt.cond.blocks[0].ops[0])
+    cond, cond_name = translate_expr(ctx, if_stmt.cond.blocks[0].ops[0], program_state)
 
     ops: List[Operation] = []
     for op in if_stmt.then.blocks[0].ops:
@@ -335,7 +337,7 @@ def split_multi_assign(
 def translate_assign(ctx: SSAValueCtx,
                      assign: psy_ast.Assign, program_state : ProgramState) -> List[Operation]:
     targets, value = split_multi_assign(assign)
-    value_fir, value_var = translate_expr(ctx, value)        
+    value_fir, value_var = translate_expr(ctx, value, program_state)        
     
     # The targets of the assignment are references and not expressions, so grab from the ctx
     translated_targets = [([], ctx[target.id.data]) for target in targets]    
@@ -352,7 +354,7 @@ def translate_assign(ctx: SSAValueCtx,
     return value_fir + targets_fir + assigns        
         
 def translate_call_expr_stmt(ctx: SSAValueCtx,
-                             call_expr: psy_ir.CallExpr, program_state : ProgramState) -> List[Operation]:
+                             call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
     ops: List[Operation] = []
     args: List[SSAValue] = []
 
@@ -364,19 +366,24 @@ def translate_call_expr_stmt(ctx: SSAValueCtx,
     name = call_expr.attributes["func"]
     assert program_state.hasImport(name.data)
     full_name=generateProcedurePrefixWithModuleName(program_state.getImportModule(name.data), name.data, "P") 
-    call = fir.Call.create(attributes={"callee": FlatSymbolRefAttr.from_str(full_name)}, result_types=[])
+    # Need return type here for expression
+    if is_expr:
+      result_type=try_translate_type(call_expr.type)
+      call = fir.Call.create(attributes={"callee": FlatSymbolRefAttr.from_str(full_name)}, result_types=[result_type])
+    else:
+      call = fir.Call.create(attributes={"callee": FlatSymbolRefAttr.from_str(full_name)}, result_types=[])
     ops.append(call)
     return ops
     
 def translate_expr(ctx: SSAValueCtx,
-                   op: Operation) -> Tuple[List[Operation], SSAValue]:
+                   op: Operation, program_state : ProgramState) -> Tuple[List[Operation], SSAValue]:
     """
     Translates op as an expression.
     If op is an expression, returns a list of the translated Operations
     and the ssa value representing the translated expression.
     Fails otherwise.
     """
-    res = try_translate_expr(ctx, op)
+    res = try_translate_expr(ctx, op, program_state)
     if res is None:
         raise Exception(f"Could not translate `{op}' as an expression")
     else:
@@ -385,7 +392,7 @@ def translate_expr(ctx: SSAValueCtx,
   
 def try_translate_expr(
         ctx: SSAValueCtx,
-        op: Operation) -> Optional[Tuple[List[Operation], SSAValue]]:
+        op: Operation, program_state : ProgramState) -> Optional[Tuple[List[Operation], SSAValue]]:
     """
     Tries to translate op as an expression.
     If op is an expression, returns a list of the translated Operations
@@ -408,22 +415,38 @@ def try_translate_expr(
       
       return [op], op.results[0]
     if isinstance(op, psy_ir.BinaryOperation):
-      return translate_binary_expr(ctx, op)
-    #    return translate_binary_expr(ctx, op)
-    #if isinstance(op, psy_ast.CallExpr):
-    #    print("No call expression here!")
-    #    return translate_call_expr(ctx, op)
-    
+      return translate_binary_expr(ctx, op, program_state)
+    if isinstance(op, psy_ir.UnaryOperation):
+      return translate_unary_expr(ctx, op, program_state)
+    if isinstance(op, psy_ir.CallExpr):      
+      call_expr= translate_call_expr_stmt(ctx, op, program_state, True)      
+      return call_expr, call_expr[0].results[0]
+        
     assert False, "Unknown Expression"
+    
+def translate_unary_expr(ctx: SSAValueCtx,
+        unary_expr: psy_ir.UnaryOperation, program_state : ProgramState) -> Tuple[List[Operation], SSAValue]:
+
+  expr, expr_ssa_value = translate_expr(ctx, unary_expr.expr.blocks[0].ops[0], program_state)
+  
+  attr = unary_expr.op
+  assert isinstance(attr, Attribute)
+  
+  if (attr.data == "NOT"):
+    constant_true=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(1, 1)},
+                                         result_types=[IntegerType.from_width(1)]) 
+    xori=arith.XOrI.get(expr_ssa_value, constant_true.results[0])
+    
+    return expr + [constant_true, xori], xori.results[0]
     
 def translate_binary_expr(
         ctx: SSAValueCtx,
-        binary_expr: psy_ast.BinaryExpr) -> Tuple[List[Operation], SSAValue]:
-    lhs, lhs_ssa_value = translate_expr(ctx, binary_expr.lhs.blocks[0].ops[0])
-    rhs, rhs_ssa_value = translate_expr(ctx, binary_expr.rhs.blocks[0].ops[0])
+        binary_expr: psy_ir.BinaryOperation, program_state : ProgramState) -> Tuple[List[Operation], SSAValue]:
+    lhs, lhs_ssa_value = translate_expr(ctx, binary_expr.lhs.blocks[0].ops[0], program_state)
+    rhs, rhs_ssa_value = translate_expr(ctx, binary_expr.rhs.blocks[0].ops[0], program_state)
     result_type = lhs_ssa_value.typ
         
-    assert (lhs_ssa_value.typ == rhs_ssa_value.typ) or isinstance(lhs_ssa_value.typ, fir.ReferenceType) or isinstance(rhs_ssa_value.typ, fir.ReferenceType)
+    #assert (lhs_ssa_value.typ == rhs_ssa_value.typ) or isinstance(lhs_ssa_value.typ, fir.ReferenceType) or isinstance(rhs_ssa_value.typ, fir.ReferenceType)
     
 
     attr = binary_expr.op
