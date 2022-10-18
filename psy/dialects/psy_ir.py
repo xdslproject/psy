@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Optional, Type, Union
 
-from xdsl.dialects.builtin import IntegerAttr, StringAttr, ArrayAttr, ArrayOfConstraint, AnyAttr, IntAttr
+from xdsl.dialects.builtin import IntegerAttr, StringAttr, ArrayAttr, ArrayOfConstraint, AnyAttr, IntAttr, FloatAttr
 from xdsl.ir import Data, MLContext, Operation, ParametrizedAttribute
 from xdsl.irdl import (AnyOf, AttributeDef, SingleBlockRegionDef, builder, ParameterDef,
                        irdl_attr_definition, irdl_op_definition)
@@ -209,27 +209,7 @@ class Routine(Operation):
       return not isinstance(self.attributes["return_var"], EmptyToken)
 
     def verify_(self) -> None:
-      pass
-
-@irdl_attr_definition
-class FloatAttr(Data[float]):
-    name = 'psy.ir.float'
-    data: float
-    width: int
-
-    @staticmethod
-    def parse_parameter(parser: Parser) -> Data:
-        val = parser.parse_float_literal()
-        return val
-
-    @staticmethod
-    def print_parameter(data, printer: Printer) -> None:
-        printer.print_string(f'{data}')
-
-    @staticmethod
-    @builder
-    def from_float(val: float, width:int) -> FloatAttr:
-        return FloatAttr(val, width)
+      pass 
 
 @irdl_op_definition
 class ArrayReference(Operation):
@@ -354,7 +334,7 @@ class Literal(Operation):
         if type(value) is int:
             attr = IntegerAttr.from_int_and_width(value, width)
         elif type(value) is float:
-            attr = FloatAttr.from_float(value, width)
+            attr = FloatAttr.from_float_and_width(value, width)
         elif type(value) is str:
             attr = StringAttr.from_str(value)
         else:
@@ -515,8 +495,7 @@ class CallExpr(Operation):
 class psyIR:
     ctx: MLContext
 
-    def __post_init__(self):
-        self.ctx.register_attr(FloatAttr)
+    def __post_init__(self):        
         self.ctx.register_attr(BoolAttr)
         self.ctx.register_attr(AnonymousAttr)
         self.ctx.register_attr(EmptyAttr)

@@ -459,11 +459,11 @@ def translate_literal(op: psy_ir.Literal) -> Operation:
 
     if isinstance(value, IntegerAttr):
         return arith.Constant.create(attributes={"value": value},
-                                         result_types=[i32])  
+                                         result_types=[value.typ])  
         
     if isinstance(value, psy_ir.FloatAttr):        
-        return arith.Constant.create(attributes={"value": FloatAttr.from_value(value.data)},
-                                         result_types=[f32])  
+        return arith.Constant.create(attributes={"value": value},
+                                         result_types=[value.type])  
 
     if isinstance(value, StringAttr):
         return arith.Constant.create(attributes={"value": value},
