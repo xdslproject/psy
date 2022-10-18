@@ -14,7 +14,7 @@ from xdsl.printer import Printer
 class BoolAttr(Data[bool]):
     name = "bool"
     data: bool
-        
+
     @staticmethod
     def parse_parameter(parser: Parser) -> BoolAttr:
         data = parser.parse_str_literal()
@@ -35,9 +35,9 @@ class BoolAttr(Data[bool]):
 @irdl_attr_definition
 class DerivedType(ParametrizedAttribute):
     name = "derivedtype"
-    
+
     type : ParameterDef[StringAttr]
-    
+
     @staticmethod
     @builder
     def from_str(type: str) -> DerivedType:
@@ -47,29 +47,29 @@ class DerivedType(ParametrizedAttribute):
     @builder
     def from_string_attr(data: StringAttr) -> DerivedType:
         return DerivedType([data])
-        
+
 @irdl_attr_definition
 class EmptyAttr(ParametrizedAttribute):
     name="empty"
-        
+
 @irdl_attr_definition
 class NamedType(ParametrizedAttribute):
     name = "psy.ir.named_type"
-   
+
     type_name : ParameterDef[StringAttr]
     kind : ParameterDef[AnyOf([StringAttr, EmptyAttr])]
-    precision : ParameterDef[AnyOf([IntAttr, EmptyAttr])]            
-      
-    def set_kind(self, kind):      
+    precision : ParameterDef[AnyOf([IntAttr, EmptyAttr])]
+
+    def set_kind(self, kind):
       self.parameters[1]=kind
-      
+
     def set_precision(self, precision):
-      self.parameters[2]=precision 
-      
+      self.parameters[2]=precision
+
 @irdl_attr_definition
 class AnonymousAttr(ParametrizedAttribute):
     name = "anonymous"
-      
+
 # Ideally would use vector, but need unknown dimension types (and ranges too!)
 @irdl_attr_definition
 class ArrayType(ParametrizedAttribute):
@@ -105,7 +105,7 @@ class ArrayType(ParametrizedAttribute):
     def from_params(
         referenced_type: Attribute,
         shape: ArrayAttr) -> ArrayType:
-        return ArrayType([shape, referenced_type])    
+        return ArrayType([shape, referenced_type])
 
 @irdl_op_definition
 class FileContainer(Operation):
@@ -125,7 +125,7 @@ class FileContainer(Operation):
 
     def verify_(self) -> None:
       pass
-    
+
 @irdl_op_definition
 class Container(Operation):
     name = "psy.ir.container"
@@ -147,7 +147,7 @@ class Container(Operation):
             routines: List[Operation],
             verify_op: bool = True) -> Container:
       res = Container.build(attributes={"container_name": container_name, "default_visibility": default_visibility, "is_program": False,
-                                        "public_routines": ArrayAttr.from_list(public_routines), "private_routines": ArrayAttr.from_list(private_routines)}, 
+                                        "public_routines": ArrayAttr.from_list(public_routines), "private_routines": ArrayAttr.from_list(private_routines)},
                                         regions=[imports, routines])
       if verify_op:
         res.verify(verify_nested_ops=False)
@@ -155,14 +155,14 @@ class Container(Operation):
 
     def verify_(self) -> None:
       pass
-    
+
 @irdl_op_definition
 class Import(Operation):
     name = "psy.ir.import"
-    
+
     import_name=AttributeDef(StringAttr)
     specific_procedures=AttributeDef(ArrayAttr)
-    
+
     @staticmethod
     def get(import_name: str,
             specific_procedures: List[str],
@@ -174,7 +174,7 @@ class Import(Operation):
 
     def verify_(self) -> None:
       pass
-                
+
 @irdl_op_definition
 class Routine(Operation):
     name = "psy.ir.routine"
@@ -185,16 +185,16 @@ class Routine(Operation):
     return_var = AttributeDef(AnyAttr())
     local_var_declarations = SingleBlockRegionDef()
     routine_body = SingleBlockRegionDef()
-    is_program = AttributeDef(BoolAttr)    
+    is_program = AttributeDef(BoolAttr)
 
     @staticmethod
     def get(routine_name: Union[str, StringAttr],
             return_var,
             imports: List[Operation],
-            args: List[Operation],            
+            args: List[Operation],
             local_var_declarations: List[Operation],
             routine_body: List[Operation],
-            is_program=False,             
+            is_program=False,
             verify_op: bool = True) -> Routine:
         if return_var is None:
           return_var=EmptyToken()
@@ -204,17 +204,18 @@ class Routine(Operation):
             # We don't verify nested operations since they might have already been verified
             res.verify(verify_nested_ops=False)
         return res
-        
+
     def isFunction(self):
       return not isinstance(self.attributes["return_var"], EmptyToken)
 
     def verify_(self) -> None:
       pass
-    
+
 @irdl_attr_definition
 class FloatAttr(Data[float]):
     name = 'psy.ir.float'
     data: float
+    width: int
 
     @staticmethod
     def parse_parameter(parser: Parser) -> Data:
@@ -227,19 +228,19 @@ class FloatAttr(Data[float]):
 
     @staticmethod
     @builder
-    def from_float(val: float) -> FloatAttr:
-        return FloatAttr(val)
-      
+    def from_float(val: float, width:int) -> FloatAttr:
+        return FloatAttr(val, width)
+
 @irdl_op_definition
 class ArrayReference(Operation):
     name="psy.ir.array_reference"
-    
+
     var = AttributeDef(AnyAttr())
     accessors = SingleBlockRegionDef()
-    
+
     @staticmethod
-    def get(var, 
-            accessors: List[Operation], 
+    def get(var,
+            accessors: List[Operation],
             verify_op: bool = True) -> ExprName:
         res = ArrayReference.build(attributes={"var": var}, regions=[accessors])
         if verify_op:
@@ -247,7 +248,7 @@ class ArrayReference(Operation):
             res.verify(verify_nested_ops=False)
         return res
 
-    
+
 @irdl_op_definition
 class ExprName(Operation):
     name = "psy.ir.id_expr"
@@ -262,21 +263,21 @@ class ExprName(Operation):
             # We don't verify nested operations since they might have already been verified
             res.verify(verify_nested_ops=False)
         return res
-        
+
 @irdl_attr_definition
 class StructureMember(ParametrizedAttribute):
   name = "psy.ir.structure_member"
-  
+
   member_name : ParameterDef[StringAttr]
   children : ParameterDef[AnyOf([AnyAttr(), EmptyAttr])]
-      
+
 @irdl_op_definition
 class StructureReference(Operation):
     name = "psy.ir.structure_reference"
 
     var = AttributeDef(AnyAttr())
     member = AttributeDef(AnyAttr())
-    
+
     @staticmethod
     def get(var, member: Union[str, StringAttr], verify_op: bool = True) -> ExprName:
         res = StructureReference.build(attributes={"var": var, "member": member})
@@ -284,22 +285,22 @@ class StructureReference(Operation):
             # We don't verify nested operations since they might have already been verified
             res.verify(verify_nested_ops=False)
         return res
-        
+
 @irdl_attr_definition
 class Token(ParametrizedAttribute):
     name = "psy.ir.token"
 
     var_name : ParameterDef[StringAttr]
     type : ParameterDef[AnyOf([NamedType, DerivedType, ArrayType])]
-    
+
 @irdl_attr_definition
 class EmptyToken(EmptyAttr):
-    name = "psy.ir.emptytoken"    
-                
+    name = "psy.ir.emptytoken"
+
 @irdl_op_definition
 class VarDef(Operation):
     name = "psy.ir.var_def"
-    
+
     var= AttributeDef(AnyAttr())
     is_proc_argument = AttributeDef(BoolAttr)
     is_constant = AttributeDef(BoolAttr)
@@ -310,8 +311,8 @@ class VarDef(Operation):
             is_proc_argument: bool = False,
             is_constant: bool = False,
             intent: str = "",
-            verify_op: bool = True) -> VarDef:    
-        #TODO: This is a bit nasty how we feed in both string and IR nodes, with arrays will be hard to fix though?                    
+            verify_op: bool = True) -> VarDef:
+        #TODO: This is a bit nasty how we feed in both string and IR nodes, with arrays will be hard to fix though?
         res = VarDef.build(attributes={"var": var, "is_proc_argument": is_proc_argument, "is_constant": is_constant, "intent": intent})
         if verify_op:
             # We don't verify nested operations since they might have already been verified
@@ -320,7 +321,7 @@ class VarDef(Operation):
 
     def verify_(self) -> None:
       pass
-            
+
 @irdl_op_definition
 class Assign(Operation):
     name = "psy.ir.assign"
@@ -340,7 +341,7 @@ class Assign(Operation):
 
     def verify_(self) -> None:
       pass
-                
+
 @irdl_op_definition
 class Literal(Operation):
     name = "psy.ir.literal"
@@ -348,12 +349,12 @@ class Literal(Operation):
     value = AttributeDef(AnyOf([StringAttr, IntegerAttr, FloatAttr]))
 
     @staticmethod
-    def get(value: Union[None, bool, int, str, float],
-            verify_op: bool = True) -> Literal:        
+    def get(value: Union[None, bool, int, str, float], width=None,
+            verify_op: bool = True) -> Literal:
         if type(value) is int:
-            attr = IntegerAttr.from_int_and_width(value, 32)
+            attr = IntegerAttr.from_int_and_width(value, width)
         elif type(value) is float:
-            attr = FloatAttr.from_float(value)
+            attr = FloatAttr.from_float(value, width)
         elif type(value) is str:
             attr = StringAttr.from_str(value)
         else:
@@ -363,7 +364,7 @@ class Literal(Operation):
             # We don't verify nested operations since they might have already been verified
             res.verify(verify_nested_ops=False)
         return res
-      
+
 @irdl_op_definition
 class IfBlock(Operation):
     name = "psy.ir.ifblock"
@@ -385,7 +386,7 @@ class IfBlock(Operation):
 
     def verify_(self) -> None:
       pass
-    
+
 @irdl_op_definition
 class Loop(Operation):
     name = "psy.ir.loop"
@@ -411,11 +412,11 @@ class Loop(Operation):
 
     def verify_(self) -> None:
       pass
-      
+
 @irdl_op_definition
 class Return(Operation):
-    name = "psy.ir.return"      
-      
+    name = "psy.ir.return"
+
 @irdl_op_definition
 class BinaryOperation(Operation):
     name = "psy.ir.binaryoperation"
@@ -455,13 +456,13 @@ class BinaryOperation(Operation):
 
     def verify_(self) -> None:
       pass
-      
+
 @irdl_op_definition
 class UnaryOperation(Operation):
     name = "psy.ir.unaryoperation"
 
     op = AttributeDef(StringAttr)
-    expr = SingleBlockRegionDef()    
+    expr = SingleBlockRegionDef()
 
     @staticmethod
     def get_valid_ops() -> List[str]:
@@ -479,7 +480,7 @@ class UnaryOperation(Operation):
 
     @staticmethod
     def get(op: str,
-            expr: Operation,            
+            expr: Operation,
             verify_op: bool = True) -> BinaryExpr:
         res = UnaryOperation.build(attributes={"op": op}, regions=[[expr]])
         if verify_op:
@@ -488,8 +489,8 @@ class UnaryOperation(Operation):
         return res
 
     def verify_(self) -> None:
-      pass      
-            
+      pass
+
 @irdl_op_definition
 class CallExpr(Operation):
     name = "psy.ir.call_expr"
@@ -509,7 +510,7 @@ class CallExpr(Operation):
 
     def verify_(self) -> None:
       pass
-                
+
 @dataclass
 class psyIR:
     ctx: MLContext
@@ -520,18 +521,18 @@ class psyIR:
         self.ctx.register_attr(AnonymousAttr)
         self.ctx.register_attr(EmptyAttr)
         self.ctx.register_attr(DerivedType)
-        self.ctx.register_attr(NamedType)        
+        self.ctx.register_attr(NamedType)
         self.ctx.register_attr(ArrayType)
         self.ctx.register_attr(Token)
         self.ctx.register_attr(EmptyToken)
         self.ctx.register_attr(StructureMember)
-        
+
         self.ctx.register_op(FileContainer)
         self.ctx.register_op(Container)
         self.ctx.register_op(Routine)
         self.ctx.register_op(Import)
         self.ctx.register_op(Return)
-        self.ctx.register_op(VarDef)        
+        self.ctx.register_op(VarDef)
         self.ctx.register_op(Assign)
         self.ctx.register_op(IfBlock)
         self.ctx.register_op(Loop)
@@ -541,7 +542,7 @@ class psyIR:
         self.ctx.register_op(StructureReference)
         self.ctx.register_op(BinaryOperation)
         self.ctx.register_op(UnaryOperation)
-        self.ctx.register_op(CallExpr)        
+        self.ctx.register_op(CallExpr)
 
     @staticmethod
     def get_type(annotation: str) -> Operation:
