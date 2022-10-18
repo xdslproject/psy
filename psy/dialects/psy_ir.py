@@ -476,13 +476,15 @@ class CallExpr(Operation):
     name = "psy.ir.call_expr"
 
     func = AttributeDef(StringAttr)
+    type= AttributeDef(AnyOf([NamedType, DerivedType, ArrayType, EmptyAttr]))
     args = SingleBlockRegionDef()
 
     @staticmethod
-    def get(func: str,
+    def get(func: str,            
             args: List[Operation],
+            type=EmptyAttr(),
             verify_op: bool = True) -> CallExpr:
-        res = CallExpr.build(regions=[args], attributes={"func": func})
+        res = CallExpr.build(regions=[args], attributes={"func": func, "type": type})
         if verify_op:
             # We don't verify nested operations since they might have already been verified
             res.verify(verify_nested_ops=False)
