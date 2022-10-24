@@ -221,7 +221,7 @@ def translate_fun_def(ctx: SSAValueCtx,
     else:
       full_name=generateProcedureSymName(program_state, routine_name.data)
 
-    function_fir=func.FuncOp.from_region(full_name, [], [], body)
+    function_fir=func.FuncOp.from_region(full_name, [], [try_translate_type(routine_def.return_var.type)] if is_function else [], body)
     #TODO - need to correlate against public routines to mark private or public!
     if routine_def.is_program.data:
       function_fir.attributes["sym_visibility"]=StringAttr("public")
