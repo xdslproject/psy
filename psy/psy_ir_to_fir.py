@@ -516,20 +516,45 @@ def translate_unary_expr(ctx: SSAValueCtx,
     
     return expr + [constant_true, xori], xori.results[0]
     
+def get_expression_conversion_type(lhs_type, rhs_type):
+  if isinstance(lhs_type, IntegerType):
+    if isinstance(rhs_type, IntegerType):      
+      if lhs_type.width.data > rhs_type.width.data: return None, lhs_type
+      if lhs_type.width.data < rhs_type.width.data: return rhs_type, None      
+      return None, None
+    return rhs_type, None # assuming it is float, so we will convert lhs to this
+  if isinstance(lhs_type, Float16Type):
+    if isintance(rhs_type, Float32Type) or isintance(rhs_type, Float64Type): return rhs_type, None
+  if isinstance(lhs_type, Float32Type):
+    if isintance(rhs_type, Float16Type): return None, lhs_type
+    if isintance(rhs_type, Float64Type): return rhs_type, None
+  if isinstance(lhs_type, Float64Type):
+    if isintance(rhs_type, Float16Type) or isintance(rhs_type, Float32Type): return None, lhs_type, 
+  return None
+    
 def translate_binary_expr(
         ctx: SSAValueCtx,
         binary_expr: psy_ir.BinaryOperation, program_state : ProgramState) -> Tuple[List[Operation], SSAValue]:
     lhs, lhs_ssa_value = translate_expr(ctx, binary_expr.lhs.blocks[0].ops[0], program_state)
     rhs, rhs_ssa_value = translate_expr(ctx, binary_expr.rhs.blocks[0].ops[0], program_state)
     result_type = lhs_ssa_value.typ
+    
+    
+    lhs_conv_type, rhs_conv_type=get_expression_conversion_type(lhs_ssa_value.typ, rhs_ssa_value.typ)
+    if lhs_conv_type is not None:
+      lhs_conversion=fir.Convert.create(operands=[lhs_ssa_value], result_types=[lhs_conv_type])
+      lhs.append(lhs_conversion)
+      lhs_ssa_value=lhs_conversion.results[0]
+      
+    if rhs_conv_type is not None:
+      rhs_conversion=fir.Convert.create(operands=[rhs_ssa_value], result_types=[rhs_conv_type])
+      rhs.append(rhs_conversion)
+      rhs_ssa_value=rhs_conversion.results[0]
         
     #assert (lhs_ssa_value.typ == rhs_ssa_value.typ) or isinstance(lhs_ssa_value.typ, fir.ReferenceType) or isinstance(rhs_ssa_value.typ, fir.ReferenceType)
     
-
     attr = binary_expr.op
-    assert isinstance(attr, Attribute)
-
-    # Need to consider special case when the binary operation has a different execution order for and & or?
+    assert isinstance(attr, Attribute)    
     
     fir_binary_expr=get_arith_instance(binary_expr.op.data, lhs_ssa_value, rhs_ssa_value)    
     
