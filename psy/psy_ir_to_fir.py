@@ -1,6 +1,6 @@
 from __future__ import annotations
-from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerType, ArrayAttr, i32, f32, 
-      Float16Type, Float32Type, Float64Type, FlatSymbolRefAttr, FloatAttr)
+from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerType, ArrayAttr, i32, f32, IndexType,
+      Float16Type, Float32Type, Float64Type, FlatSymbolRefAttr, FloatAttr, UnitAttr)
 from xdsl.dialects import func, arith
 from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext
 from psy.dialects import psy_ir
@@ -287,6 +287,8 @@ def try_translate_stmt(ctx: SSAValueCtx,
       return translate_assign(ctx, op, program_state)
     if isinstance(op, psy_ir.IfBlock):
       return translate_if(ctx, op, program_state)
+    if isinstance(op, psy_ir.Loop):
+      return translate_loop(ctx, op, program_state)
 
     res = None #try_translate_expr(ctx, op)
     if res is None:
@@ -305,6 +307,42 @@ def translate_stmt(ctx: SSAValueCtx, op: Operation, program_state : ProgramState
         raise Exception(f"Could not translate `{op}' as a statement")
     else:
         return ops
+        
+def translate_loop(ctx: SSAValueCtx,
+                  for_stmt: psy_ir.Loop, program_state : ProgramState) -> List[Operation]:
+    start, start_name = translate_expr(ctx, for_stmt.start.blocks[0].ops[0], program_state)
+    conv_start=fir.Convert.create(operands=[start_name], result_types=[IndexType()])
+    stop, stop_name = translate_expr(ctx, for_stmt.stop.blocks[0].ops[0], program_state)
+    conv_stop=fir.Convert.create(operands=[stop_name], result_types=[IndexType()])
+    step, step_name = translate_expr(ctx, for_stmt.step.blocks[0].ops[0], program_state)
+    conv_step=fir.Convert.create(operands=[step_name], result_types=[IndexType()])
+
+    ops: List[Operation] = []
+    for op in for_stmt.body.blocks[0].ops:
+        stmt_ops = translate_stmt(ctx, op, program_state)
+        ops += stmt_ops
+    #body = Region.from_operation_list(ops)
+
+    iterator = ctx[for_stmt.variable.var_name.data]   
+    
+    block = Block.from_arg_types([IndexType(), i32])      
+    store=fir.Store.create(operands=[block.args[1], iterator])
+    
+    add_iteration_count=arith.Addi.get(block.args[0], conv_step)
+    load_iterator_var=fir.Load.create(operands=[iterator], result_types=[try_translate_type(for_stmt.variable.type)])
+    convert_step_for_it=fir.Convert.create(operands=[conv_step.results[0]], result_types=[i32])
+    add_to_iterator=arith.Addi.get(load_iterator_var.results[0], convert_step_for_it.results[0])
+    block_result=fir.Result.create(operands=[add_iteration_count.results[0], add_to_iterator.results[0]])
+    
+    block.add_ops([store]+ops+[add_iteration_count, load_iterator_var, convert_step_for_it, add_to_iterator, block_result])
+    body=Region()
+    body.add_block(block)
+    
+    do_loop=fir.DoLoop.create(attributes={"finalValue": UnitAttr()}, 
+    operands=[conv_start.results[0], conv_stop.results[0], conv_step.results[0], start_name], result_types=[IndexType(), i32], regions=[body])
+    final_iterator_store=fir.Store.create(operands=[do_loop.results[0], iterator])
+    return start+[conv_start]+stop+[conv_stop]+step+[conv_step, do_loop, final_iterator_store]    
+      
         
 def translate_if(ctx: SSAValueCtx, if_stmt: psy_ir.If, program_state : ProgramState) -> List[Operation]:
     cond, cond_name = translate_expr(ctx, if_stmt.cond.blocks[0].ops[0], program_state)
