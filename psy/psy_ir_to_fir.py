@@ -373,7 +373,7 @@ def translate_loop(ctx: SSAValueCtx,
     
     do_loop=fir.DoLoop.create(attributes={"finalValue": UnitAttr()}, 
     operands=[conv_start.results[0], conv_stop.results[0], conv_step.results[0], start_name], result_types=[IndexType(), i32], regions=[body])
-    final_iterator_store=fir.Store.create(operands=[do_loop.results[0], iterator])
+    final_iterator_store=fir.Store.create(operands=[do_loop.results[1], iterator])
     return start+[conv_start]+stop+[conv_stop]+step+[conv_step, do_loop, final_iterator_store]    
       
         
