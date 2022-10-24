@@ -1,7 +1,7 @@
 from __future__ import annotations
 from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerType, ArrayAttr, i32, f32, IndexType,
       Float16Type, Float32Type, Float64Type, FlatSymbolRefAttr, FloatAttr, UnitAttr)
-from xdsl.dialects import func, arith
+from xdsl.dialects import func, arith, cf
 from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext
 from psy.dialects import psy_ir
 
@@ -44,6 +44,7 @@ class ProgramState:
   def __init__(self):
     self.module_name=None
     self.routine_name=None
+    self.return_block=None
     self.imports={}
   
   def setRoutineName(self, routine_name):
@@ -62,13 +63,25 @@ class ProgramState:
     self.module_name=module_name
     
   def unsetModuleName(self):
-    self.module_name=None
+    self.module_name=None        
   
   def getModuleName(self):
     return self.module_name
     
   def isInModule(self):
     return self.module_name is not None
+    
+  def setReturnBlock(self, rb):
+    self.return_block=rb
+    
+  def hasReturnBlock(self):
+    return self.return_block is not NoneAttr
+    
+  def getReturnBlock(self):
+    return self.return_block
+    
+  def clearReturnBlock(self):
+    self.return_block=None
     
   def addImport(self, container_name, routine_name):
     self.imports[routine_name]=container_name
@@ -148,7 +161,7 @@ def translate_fun_def(ctx: SSAValueCtx,
     #    return_type = choco_type.none_type
 
     body = Region()
-    block = Block()
+    block = Block()        
     
     # Create a new nested scope and relate parameter identifiers with SSA values of block arguments
     # For now create this empty, will add in support for arguments later on!
@@ -175,6 +188,13 @@ def translate_fun_def(ctx: SSAValueCtx,
       if res is not None:
         to_add.append(res)
         
+    is_function=not isinstance(routine_def.return_var, psy_ir.EmptyToken)
+    if is_function:
+      return_block=Block.from_arg_types([])
+      load_return_var=fir.Load.create(operands=[c[routine_def.return_var.var_name.data]], result_types=[try_translate_type(routine_def.return_var.type)])      
+      return_block.add_ops([load_return_var, func.Return.create(operands=[load_return_var.results[0]])])
+      program_state.setReturnBlock(return_block)
+        
     for op in routine_def.routine_body.blocks[0].ops:
       res=translate_def_or_stmt(c, op, program_state) # should be SSAValueCtx created above for routine
       if res is not None:        
@@ -182,20 +202,19 @@ def translate_fun_def(ctx: SSAValueCtx,
         
     program_state.unsetRoutineName()
     program_state.clearImports()
+    program_state.clearReturnBlock()
     
-    is_function=not isinstance(routine_def.return_var, psy_ir.EmptyToken)    
+    block.add_ops(flatten(to_add))          
     
-    if is_function:
-      # Need to return the variable at the end of the routine
-      load_return_var=fir.Load.create(operands=[c[routine_def.return_var.var_name.data]], result_types=[try_translate_type(routine_def.return_var.type)])
-      to_add.append([load_return_var])
-      to_add.append([func.Return.create(operands=[load_return_var.results[0]])])
-    else:
-      # A return is always needed at the end of the procedure
-      to_add.append([func.Return.create()])
+    if not is_function:
+       # A return is always needed at the end of the procedure      
+      block.add_op(func.Return.create())
       
-    block.add_ops(flatten(to_add))
     body.add_block(block)
+    
+    if is_function:      
+      # Need to return the variable at the end of the routine          
+      body.add_block(return_block)          
     
     if routine_def.is_program.data:
       full_name="_QQmain"
@@ -298,6 +317,8 @@ def try_translate_stmt(ctx: SSAValueCtx,
       return translate_if(ctx, op, program_state)
     if isinstance(op, psy_ir.Loop):
       return translate_loop(ctx, op, program_state)
+    if isinstance(op, psy_ir.Return):
+      return translate_return(ctx, op, program_state)
 
     res = None #try_translate_expr(ctx, op)
     if res is None:
@@ -316,6 +337,9 @@ def translate_stmt(ctx: SSAValueCtx, op: Operation, program_state : ProgramState
         raise Exception(f"Could not translate `{op}' as a statement")
     else:
         return ops
+        
+def translate_return(ctx: SSAValueCtx, return_stmt: psy_ir.Return, program_state : ProgramState) -> List[Operation]:
+  return [cf.Branch.get(program_state.getReturnBlock())]
         
 def translate_loop(ctx: SSAValueCtx,
                   for_stmt: psy_ir.Loop, program_state : ProgramState) -> List[Operation]:
