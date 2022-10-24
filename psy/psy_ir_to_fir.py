@@ -396,33 +396,39 @@ def translate_if(ctx: SSAValueCtx, if_stmt: psy_ir.If, program_state : ProgramSt
 
     new_op = fir.If.create(operands=[cond_name], regions=[then, orelse]) 
     return cond + [new_op]
-        
-def split_multi_assign(
-        assign: psy_ast.Assign) -> Tuple[List[Operation], Operation]:
-    """Get the list of targets of a multi assign, as well as the expression value."""
-    if isinstance(assign.rhs.op, psy_ir.Assign):
-        targets, value = split_multi_assign(assign.rhs.op)
-        return [assign.target.op] + targets, value
-    return [assign.lhs.op], assign.rhs.op        
+    
+def get_store_conversion_if_needed(target_type, expr_type):
+  if isinstance(target_type, fir.ReferenceType): return get_store_conversion_if_needed(target_type.type, expr_type)
+  if isinstance(target_type, IntegerType):
+    if isinstance(expr_type, IntegerType):
+      if (target_type.width.data != expr_type.width.data):
+        return target_type
+      else:
+        return None
+    else:
+      return target_type
+  if isinstance(target_type, Float16Type) and not isinstance(expr_type, Float16Type):
+    return target_type
+  if isinstance(target_type, Float32Type) and not isinstance(expr_type, Float32Type):
+    return target_type
+  if isinstance(target_type, Float64Type) and not isinstance(expr_type, Float64Type):
+    return target_type
+    
+  return None
         
 def translate_assign(ctx: SSAValueCtx,
                      assign: psy_ast.Assign, program_state : ProgramState) -> List[Operation]:
-    targets, value = split_multi_assign(assign)
-    value_fir, value_var = translate_expr(ctx, value, program_state)        
+    value_fir, value_var = translate_expr(ctx, assign.rhs.op, program_state)        
     
     # The targets of the assignment are references and not expressions, so grab from the ctx
-    translated_targets = [([], ctx[target.id.data]) for target in targets]    
-    targets_fir = [
-        target_op for target in translated_targets for target_op in target[0]
-    ]    
-    targets_var = [target[1] for target in translated_targets]
-    
-    assigns: List[Operation] = [
-        fir.Store.create(operands=[value_var, target_var])
-        for target_var in targets_var
-    ]      
-    
-    return value_fir + targets_fir + assigns        
+    translated_target = ctx[assign.lhs.op.id.data]
+    target_conversion_type=get_store_conversion_if_needed(translated_target.typ, value_var.typ)
+    if target_conversion_type is not None:
+      converter=fir.Convert.create(operands=[value_var], result_types=[target_conversion_type])
+      value_fir.append(converter)
+      return value_fir + [fir.Store.create(operands=[converter.results[0], translated_target])]
+    else:
+      return value_fir + [fir.Store.create(operands=[value_var, translated_target])]
         
 def translate_call_expr_stmt(ctx: SSAValueCtx,
                              call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
