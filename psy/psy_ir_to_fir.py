@@ -178,13 +178,22 @@ def translate_fun_def(ctx: SSAValueCtx,
     for op in routine_def.routine_body.blocks[0].ops:
       res=translate_def_or_stmt(c, op, program_state) # should be SSAValueCtx created above for routine
       if res is not None:        
-        to_add.append(res)
-        
-    # A return is always needed at the end of the procedure
-    to_add.append([func.Return.create()])
+        to_add.append(res)      
         
     program_state.unsetRoutineName()
     program_state.clearImports()
+    
+    is_function=not isinstance(routine_def.return_var, psy_ir.EmptyToken)    
+    
+    if is_function:
+      # Need to return the variable at the end of the routine
+      load_return_var=fir.Load.create(operands=[c[routine_def.return_var.var_name.data]], result_types=[try_translate_type(routine_def.return_var.type)])
+      to_add.append([load_return_var])
+      to_add.append([func.Return.create(operands=[load_return_var.results[0]])])
+    else:
+      # A return is always needed at the end of the procedure
+      to_add.append([func.Return.create()])
+      
     block.add_ops(flatten(to_add))
     body.add_block(block)
     
