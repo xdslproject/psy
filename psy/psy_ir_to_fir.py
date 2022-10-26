@@ -161,12 +161,22 @@ def translate_fun_def(ctx: SSAValueCtx,
     #    return_type = choco_type.none_type
 
     body = Region()
-    block = Block()        
+   
     
     # Create a new nested scope and relate parameter identifiers with SSA values of block arguments
     # For now create this empty, will add in support for arguments later on!
     c = SSAValueCtx(dictionary=dict(), #zip(param_names, block.args)),
                     parent_scope=ctx)
+                    
+    arg_types=[]
+    arg_names=[]
+    for arg in routine_def.args.data:
+      arg_type=fir.ReferenceType([try_translate_type(arg.type)])
+      arg_names.append(arg.var_name.data)
+      c[arg.var_name.data] = arg_type
+      arg_types.append(arg_type)
+      
+    block = Block.from_arg_types(arg_types)
                     
     # use the nested scope when translate the body of the function
     #block.add_ops(
@@ -184,9 +194,11 @@ def translate_fun_def(ctx: SSAValueCtx,
     to_add=[]
     program_state.setRoutineName(routine_name.data)
     for op in routine_def.local_var_declarations.blocks[0].ops:
-      res=translate_def_or_stmt(c, op, program_state) # should be SSAValueCtx created above for routine
-      if res is not None:
-        to_add.append(res)
+      # Ignore dummys to/from procedure as these handled as block arguments
+      if op.var.var_name.data not in arg_names:
+        res=translate_def_or_stmt(c, op, program_state) # should be SSAValueCtx created above for routine
+        if res is not None:
+          to_add.append(res)
         
     is_function=not isinstance(routine_def.return_var, psy_ir.EmptyToken)
     if is_function:
@@ -221,7 +233,7 @@ def translate_fun_def(ctx: SSAValueCtx,
     else:
       full_name=generateProcedureSymName(program_state, routine_name.data)
 
-    function_fir=func.FuncOp.from_region(full_name, [], [try_translate_type(routine_def.return_var.type)] if is_function else [], body)
+    function_fir=func.FuncOp.from_region(full_name, arg_types, [try_translate_type(routine_def.return_var.type)] if is_function else [], body)
     #TODO - need to correlate against public routines to mark private or public!
     if routine_def.is_program.data:
       function_fir.attributes["sym_visibility"]=StringAttr("public")
@@ -291,7 +303,7 @@ def translate_var_def(ctx: SSAValueCtx,
       "in_type":type}, operands=[], result_types=[ref_type])
 
     # relate variable identifier and SSA value by adding it into the current context
-    ctx[var_name.data] = fir_var_def.results[0]    
+    ctx[var_name.data] = fir_var_def.results[0]
     return [fir_var_def]   
     
 def try_translate_type(op: Operation) -> Optional[Attribute]:
