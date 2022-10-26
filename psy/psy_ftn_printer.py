@@ -197,7 +197,7 @@ class FortranPrinter():
     if isinstance(literal_val, IntegerAttr):
       print(op.attributes["value"].parameters[0].data, end="")
     elif isinstance(literal_val, psy_ir.FloatAttr):
-      print(op.attributes["value"].data, end="")      
+      print(op.attributes["value"].value.data, end="")
         
   def print_assign(self, op):    
     self.print_indent()
