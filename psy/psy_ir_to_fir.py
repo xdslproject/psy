@@ -446,11 +446,17 @@ def translate_call_expr_stmt(ctx: SSAValueCtx,
                              call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
     ops: List[Operation] = []
     args: List[SSAValue] = []
-
-    #for arg in call_expr.args.blocks[0].ops:
-    #    op, arg = translate_expr(ctx, arg)
-    #    ops += op
-    #    args.append(arg)      
+	
+    for arg in call_expr.args.blocks[0].ops:
+        op, arg = translate_expr(ctx, arg, program_state)
+        ops += op
+        if not isinstance(arg.typ, fir.ReferenceType):
+          reference_creation=fir.Alloca.create(attributes={"in_type":arg.typ, "valuebyref": UnitAttr()}, operands=[], result_types=[fir.ReferenceType([arg.typ])])
+          store_op=fir.Store.create(operands=[arg, reference_creation.results[0]])
+          ops+=[reference_creation, store_op]
+          args.append(reference_creation.results[0])
+        else:        
+          args.append(arg)
 
     name = call_expr.attributes["func"]
     assert program_state.hasImport(name.data)
@@ -458,7 +464,7 @@ def translate_call_expr_stmt(ctx: SSAValueCtx,
     # Need return type here for expression
     if is_expr:
       result_type=try_translate_type(call_expr.type)
-      call = fir.Call.create(attributes={"callee": FlatSymbolRefAttr.from_str(full_name)}, result_types=[result_type])
+      call = fir.Call.create(attributes={"callee": FlatSymbolRefAttr.from_str(full_name)}, operands=args, result_types=[result_type])
     else:
       call = fir.Call.create(attributes={"callee": FlatSymbolRefAttr.from_str(full_name)}, result_types=[])
     ops.append(call)
@@ -509,7 +515,7 @@ def try_translate_expr(
       return translate_unary_expr(ctx, op, program_state)
     if isinstance(op, psy_ir.CallExpr):      
       call_expr= translate_call_expr_stmt(ctx, op, program_state, True)      
-      return call_expr, call_expr[0].results[0]
+      return call_expr, call_expr[-1].results[0]
         
     assert False, "Unknown Expression"
     
