@@ -1,6 +1,6 @@
 from __future__ import annotations
 from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerType, ArrayAttr, i32, f32, f64, IndexType,
-      Float16Type, Float32Type, Float64Type, FlatSymbolRefAttr, FloatAttr, UnitAttr, DenseIntOrFPElementsAttr, VectorType)
+      Float16Type, Float32Type, Float64Type, FlatSymbolRefAttr, FloatAttr, UnitAttr, DenseIntOrFPElementsAttr, VectorType, FlatSymbolRefAttr)
 from xdsl.dialects import func, arith, cf
 from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext
 from psy.dialects import psy_ir
@@ -321,9 +321,9 @@ def define_array_var(ctx: SSAValueCtx,
 
     undef=fir.Undefined.create(result_types=[type])
     hasval=fir.HasValue.create(operands=[undef.results[0]])
-    glob=fir.Global.create(attributes={"linkName": StringAttr("internal"), "sym_name": StringAttr("_QFE"+var_name.data), "symref": StringAttr("@_QFE"+var_name.data), "type": type},
+    glob=fir.Global.create(attributes={"linkName": StringAttr("internal"), "sym_name": StringAttr("_QFE"+var_name.data), "symref": FlatSymbolRefAttr.from_str("@_QFE"+var_name.data), "type": type},
           regions=[Region.from_operation_list([undef, hasval])])
-    addr_lookup=fir.AddressOf.create(attributes={"symbol": StringAttr("@_QFE"+var_name.data)}, result_types=[type])
+    addr_lookup=fir.AddressOf.create(attributes={"symbol": FlatSymbolRefAttr.from_str("@_QFE"+var_name.data)}, result_types=[type])
     program_state.appendToGlobal(glob)
     ctx[var_name.data] = addr_lookup.results[0]
     return [addr_lookup]
