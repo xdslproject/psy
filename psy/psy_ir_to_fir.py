@@ -1,5 +1,5 @@
 from __future__ import annotations
-from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerType, ArrayAttr, i32, f32, IndexType,
+from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerType, ArrayAttr, i32, f32, f64, IndexType,
       Float16Type, Float32Type, Float64Type, FlatSymbolRefAttr, FloatAttr, UnitAttr, DenseIntOrFPElementsAttr, VectorType)
 from xdsl.dialects import func, arith, cf
 from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext
@@ -145,7 +145,7 @@ def translate_container(ctx: SSAValueCtx, op: Operation, block, globals_lists) -
     block.add_ops(translate_fun_def(ctx, routine, program_state) for routine in op.routines.blocks[0].ops)
   elif isinstance(op, psy_ir.Routine):
     block.add_op(translate_fun_def(ctx, op, program_state))
-  
+
   globals_lists.extend(program_state.getGlobals())
 
 def translate_fun_def(ctx: SSAValueCtx,
@@ -321,7 +321,7 @@ def define_array_var(ctx: SSAValueCtx,
 
     undef=fir.Undefined.create(result_types=[type])
     hasval=fir.HasValue.create(operands=[undef.results[0]])
-    glob=fir.Global.create(attributes={"linkName": StringAttr("internal"), "sym_name": StringAttr("_QFE"+var_name.data), "symref": StringAttr("@_QFE"+var_name.data), "type": type}, 
+    glob=fir.Global.create(attributes={"linkName": StringAttr("internal"), "sym_name": StringAttr("_QFE"+var_name.data), "symref": StringAttr("@_QFE"+var_name.data), "type": type},
           regions=[Region.from_operation_list([undef, hasval])])
     addr_lookup=fir.AddressOf.create(attributes={"symbol": StringAttr("@_QFE"+var_name.data)}, result_types=[type])
     program_state.appendToGlobal(glob)
@@ -339,7 +339,11 @@ def try_translate_type(op: Operation) -> Optional[Attribute]:
     """Tries to translate op as a type, returns None otherwise."""
     if isinstance(op, psy_ir.NamedType):
       if op.type_name.data == "integer": return i32
-      if op.type_name.data == "real": return f32
+      if op.type_name.data == "real":
+        if op.precision.data == 4: return f32
+        if op.precision.data == 8: return f64
+        raise Exception("Not sure how to interpret real")
+
     elif isinstance(op, psy_ir.ArrayType):
       array_shape=op.get_shape()
       array_size=[]
