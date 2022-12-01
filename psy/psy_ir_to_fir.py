@@ -1,5 +1,5 @@
 from __future__ import annotations
-from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerType, ArrayAttr, i32, f32, f64, IndexType,
+from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerType, ArrayAttr, i32, f32, f64, IndexType, DictionaryAttr,
       Float16Type, Float32Type, Float64Type, FlatSymbolRefAttr, FloatAttr, UnitAttr, DenseIntOrFPElementsAttr, VectorType, FlatSymbolRefAttr)
 from xdsl.dialects import func, arith, cf
 from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext
@@ -246,6 +246,12 @@ def translate_fun_def(ctx: SSAValueCtx,
     #TODO - need to correlate against public routines to mark private or public!
     if routine_def.is_program.data:
       function_fir.attributes["sym_visibility"]=StringAttr("public")
+    
+    if len(arg_names) > 0:
+      arg_attrs={}
+      for arg_name in arg_names:
+        arg_attrs[StringAttr("fir.bindc_name")]=StringAttr(arg_name)
+      function_fir.attributes["arg_attrs"]=DictionaryAttr.from_dict(arg_attrs)
     return function_fir
 
 def generateProcedureSymName(program_state : ProgramState, routine_name:str):
@@ -503,7 +509,7 @@ def translate_call_expr_stmt(ctx: SSAValueCtx,
     full_name=generateProcedurePrefixWithModuleName(program_state.getImportModule(name.data), name.data, "P")
     # Need return type here for expression
     if is_expr:
-      result_type=try_translate_type(call_expr.type)
+      result_type=try_translate_type(call_expr.type)      
       call = fir.Call.create(attributes={"callee": FlatSymbolRefAttr.from_str(full_name)}, operands=args, result_types=[result_type])
     else:
       call = fir.Call.create(attributes={"callee": FlatSymbolRefAttr.from_str(full_name)}, operands=args, result_types=[])
@@ -548,7 +554,8 @@ def try_translate_expr(
       elif isinstance(ssa_value.typ.type, Float32Type):
         result_type=f32
       elif isinstance(ssa_value.typ.type, fir.ArrayType):
-        result_type=ssa_value.typ.type
+        # Already have created the addressof reference so just return this
+        return None, ssa_value
 
       op=fir.Load.create(operands=[ssa_value], result_types=[result_type])
 
