@@ -187,7 +187,7 @@ def translate_fun_def(ctx: SSAValueCtx,
     block = Block.from_arg_types(arg_types)
 
     for index, arg_name in enumerate(arg_names):
-      c[arg_name] = block._args[index]
+      c[arg_name] = block.args[index]
 
     # use the nested scope when translate the body of the function
     #block.add_ops(
