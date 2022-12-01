@@ -2,7 +2,7 @@ from __future__ import annotations
 from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerType, ArrayAttr, i32, f32, f64, IndexType, DictionaryAttr,
       Float16Type, Float32Type, Float64Type, FlatSymbolRefAttr, FloatAttr, UnitAttr, DenseIntOrFPElementsAttr, VectorType, FlatSymbolRefAttr)
 from xdsl.dialects import func, arith, cf
-from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext
+from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext, BlockArgument
 from psy.dialects import psy_ir
 
 from util.list_ops import flatten
@@ -182,10 +182,12 @@ def translate_fun_def(ctx: SSAValueCtx,
     for arg in routine_def.args.data:
       arg_type=fir.ReferenceType([try_translate_type(arg.type)])
       arg_names.append(arg.var_name.data)
-      c[arg.var_name.data] = arg_type
       arg_types.append(arg_type)
 
     block = Block.from_arg_types(arg_types)
+
+    for index, arg_name in enumerate(arg_names):
+      c[arg_name] = block._args[index]
 
     # use the nested scope when translate the body of the function
     #block.add_ops(
@@ -618,8 +620,8 @@ def get_expression_conversion_type(lhs_type, rhs_type):
     if isintance(rhs_type, Float16Type): return None, lhs_type
     if isintance(rhs_type, Float64Type): return rhs_type, None
   if isinstance(lhs_type, Float64Type):
-    if isintance(rhs_type, Float16Type) or isintance(rhs_type, Float32Type): return None, lhs_type,
-  return None
+    if isinstance(rhs_type, Float16Type) or isinstance(rhs_type, Float32Type): return None, lhs_type,
+  return None, None
 
 def translate_binary_expr(
         ctx: SSAValueCtx,
@@ -628,6 +630,15 @@ def translate_binary_expr(
     rhs, rhs_ssa_value = translate_expr(ctx, binary_expr.rhs.blocks[0].ops[0], program_state)
     result_type = lhs_ssa_value.typ
 
+    if isinstance(lhs_ssa_value.typ, fir.ReferenceType):
+      load_op=fir.Load.create(operands=[lhs_ssa_value], result_types=[lhs_ssa_value.typ.type])
+      lhs.append(load_op)
+      lhs_ssa_value=load_op.results[0]
+
+    if isinstance(rhs_ssa_value.typ, fir.ReferenceType):
+      load_op=fir.Load.create(operands=[rhs_ssa_value], result_types=[rhs_ssa_value.typ.type])
+      rhs.append(load_op)
+      rhs_ssa_value=load_op.results[0]
 
     lhs_conv_type, rhs_conv_type=get_expression_conversion_type(lhs_ssa_value.typ, rhs_ssa_value.typ)
     if lhs_conv_type is not None:
