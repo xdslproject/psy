@@ -246,7 +246,7 @@ def translate_fun_def(ctx: SSAValueCtx,
     #TODO - need to correlate against public routines to mark private or public!
     if routine_def.is_program.data:
       function_fir.attributes["sym_visibility"]=StringAttr("public")
-    
+
     if len(arg_names) > 0:
       arg_attrs={}
       for arg_name in arg_names:
@@ -477,16 +477,20 @@ def get_store_conversion_if_needed(target_type, expr_type):
 def translate_assign(ctx: SSAValueCtx,
                      assign: psy_ast.Assign, program_state : ProgramState) -> List[Operation]:
     value_fir, value_var = translate_expr(ctx, assign.rhs.op, program_state)
-
+    lhs_fir=[]
     # The targets of the assignment are references and not expressions, so grab from the ctx
-    translated_target = ctx[assign.lhs.op.id.data]
+    if isinstance(assign.lhs.op, psy_ir.ArrayReference):
+      lhs_fir, lhs_var=translate_expr(ctx, assign.lhs.op, program_state)
+      translated_target=lhs_var
+    else:
+      translated_target = ctx[assign.lhs.op.id.data]
     target_conversion_type=get_store_conversion_if_needed(translated_target.typ, value_var.typ)
     if target_conversion_type is not None:
       converter=fir.Convert.create(operands=[value_var], result_types=[target_conversion_type])
       value_fir.append(converter)
-      return value_fir + [fir.Store.create(operands=[converter.results[0], translated_target])]
+      return value_fir + lhs_fir + [fir.Store.create(operands=[converter.results[0], translated_target])]
     else:
-      return value_fir + [fir.Store.create(operands=[value_var, translated_target])]
+      return value_fir + lhs_fir +[fir.Store.create(operands=[value_var, translated_target])]
 
 def translate_call_expr_stmt(ctx: SSAValueCtx,
                              call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
@@ -509,7 +513,7 @@ def translate_call_expr_stmt(ctx: SSAValueCtx,
     full_name=generateProcedurePrefixWithModuleName(program_state.getImportModule(name.data), name.data, "P")
     # Need return type here for expression
     if is_expr:
-      result_type=try_translate_type(call_expr.type)      
+      result_type=try_translate_type(call_expr.type)
       call = fir.Call.create(attributes={"callee": FlatSymbolRefAttr.from_str(full_name)}, operands=args, result_types=[result_type])
     else:
       call = fir.Call.create(attributes={"callee": FlatSymbolRefAttr.from_str(full_name)}, operands=args, result_types=[])
@@ -567,8 +571,24 @@ def try_translate_expr(
     if isinstance(op, psy_ir.CallExpr):
       call_expr= translate_call_expr_stmt(ctx, op, program_state, True)
       return call_expr, call_expr[-1].results[0]
+    if isinstance(op, psy_ir.ArrayReference):
+      return translate_array_reference_expr(ctx, op, program_state)
 
     assert False, "Unknown Expression"
+
+def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, program_state : ProgramState):
+  expressions=[]
+  ssa_list=[ctx[op.var.var_name.data]]
+  for accessor in op.accessors.blocks[0].ops:
+    expr, ssa=try_translate_expr(ctx, accessor, program_state)
+    expressions.extend(expr)
+    ssa_list.append(ssa)
+
+  fir_type=try_translate_type(op.var.type)
+
+  coordinate_of=fir.CoordinateOf.create(attributes={"baseType": fir.ReferenceType([fir_type])}, operands=ssa_list, result_types=[fir.ReferenceType([fir_type.type])])
+  expressions.append(coordinate_of)
+  return expressions, coordinate_of.results[0]
 
 def translate_unary_expr(ctx: SSAValueCtx,
         unary_expr: psy_ir.UnaryOperation, program_state : ProgramState) -> Tuple[List[Operation], SSAValue]:
