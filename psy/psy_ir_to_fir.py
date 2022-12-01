@@ -321,9 +321,9 @@ def define_array_var(ctx: SSAValueCtx,
 
     undef=fir.Undefined.create(result_types=[type])
     hasval=fir.HasValue.create(operands=[undef.results[0]])
-    glob=fir.Global.create(attributes={"linkName": StringAttr("internal"), "sym_name": StringAttr("_QFE"+var_name.data), "symref": FlatSymbolRefAttr.from_str("@_QFE"+var_name.data), "type": type},
+    glob=fir.Global.create(attributes={"linkName": StringAttr("internal"), "sym_name": StringAttr("_QFE"+var_name.data), "symref": FlatSymbolRefAttr.from_str("_QFE"+var_name.data), "type": type},
           regions=[Region.from_operation_list([undef, hasval])])
-    addr_lookup=fir.AddressOf.create(attributes={"symbol": FlatSymbolRefAttr.from_str("@_QFE"+var_name.data)}, result_types=[type])
+    addr_lookup=fir.AddressOf.create(attributes={"symbol": FlatSymbolRefAttr.from_str("_QFE"+var_name.data)}, result_types=[fir.ReferenceType([type])])
     program_state.appendToGlobal(glob)
     ctx[var_name.data] = addr_lookup.results[0]
     return [addr_lookup]
