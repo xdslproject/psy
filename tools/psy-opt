@@ -9,6 +9,7 @@ from xdsl.dialects.builtin import ModuleOp
 
 from psy.psy_ftn_printer import print_fortran
 from psy.psy_ir_to_fir import psy_ir_to_fir
+from psy.apply_gpu import apply_gpu_analysis
 
 from psy.dialects.psy_ir import psyIR
 from util.semantic_error import SemanticError
@@ -20,7 +21,8 @@ from xdsl.xdsl_opt_main import xDSLOptMain
 class PsyOptMain(xDSLOptMain):
 
     passes_native = [       
-		psy_ir_to_fir
+      psy_ir_to_fir,
+      apply_gpu_analysis
     ]
 
     def register_all_passes(self):
