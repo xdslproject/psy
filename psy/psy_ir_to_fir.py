@@ -1,5 +1,5 @@
 from __future__ import annotations
-from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerType, ArrayAttr, i32, f32, f64, IndexType, DictionaryAttr,
+from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerType, ArrayAttr, i32, i64, f32, f64, IndexType, DictionaryAttr,
       Float16Type, Float32Type, Float64Type, FlatSymbolRefAttr, FloatAttr, UnitAttr, DenseIntOrFPElementsAttr, VectorType, FlatSymbolRefAttr)
 from xdsl.dialects import func, arith, cf
 from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext, BlockArgument
@@ -582,9 +582,33 @@ def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, 
   expressions=[]
   ssa_list=[ctx[op.var.var_name.data]]
   for accessor in op.accessors.blocks[0].ops:
+    # A lot of this is doing the subtraction to zero-base each index (default is starting at 1 in Fortran)
+    # TODO - currently we assume always starts at 1 but in Fortran can set this so will need to keep track of that in the declaration and apply here
     expr, ssa=try_translate_expr(ctx, accessor, program_state)
     expressions.extend(expr)
-    ssa_list.append(ssa)
+    subtraction_index=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(1, 64)},
+                                         result_types=[i64])
+    expressions.append(subtraction_index)
+
+    lhs_conv_type, rhs_conv_type=get_expression_conversion_type(ssa.typ, subtraction_index.results[0].typ)
+
+    lhs_conv=perform_data_conversion_if_needed(ssa, lhs_conv_type)
+    if lhs_conv is not None:
+      expressions.append(lhs_conv)
+      lhs_ssa=lhs_conv.results[0]
+    else:
+      lhs_ssa=ssa
+
+    rhs_conv=perform_data_conversion_if_needed(subtraction_index.results[0], rhs_conv_type)
+    if rhs_conv is not None:
+      expressions.append(rhs_conv)
+      rhs_ssa=rhs_conv.results[0]
+    else:
+      rhs_ssa=subtraction_index.results[0]
+
+    substract_expr=arith.Subi.get(lhs_ssa, rhs_ssa)
+    expressions.append(substract_expr)
+    ssa_list.append(substract_expr.results[0])
 
   fir_type=try_translate_type(op.var.type)
 
@@ -623,6 +647,12 @@ def get_expression_conversion_type(lhs_type, rhs_type):
     if isinstance(rhs_type, Float16Type) or isinstance(rhs_type, Float32Type): return None, lhs_type,
   return None, None
 
+def perform_data_conversion_if_needed(expr_ssa, conv_type):
+  if conv_type is not None:
+    expr_conversion=fir.Convert.create(operands=[expr_ssa], result_types=[conv_type])
+    return expr_conversion
+  return None
+
 def translate_binary_expr(
         ctx: SSAValueCtx,
         binary_expr: psy_ir.BinaryOperation, program_state : ProgramState) -> Tuple[List[Operation], SSAValue]:
@@ -641,15 +671,15 @@ def translate_binary_expr(
       rhs_ssa_value=load_op.results[0]
 
     lhs_conv_type, rhs_conv_type=get_expression_conversion_type(lhs_ssa_value.typ, rhs_ssa_value.typ)
-    if lhs_conv_type is not None:
-      lhs_conversion=fir.Convert.create(operands=[lhs_ssa_value], result_types=[lhs_conv_type])
-      lhs.append(lhs_conversion)
-      lhs_ssa_value=lhs_conversion.results[0]
+    lhs_conv=perform_data_conversion_if_needed(lhs_ssa_value, lhs_conv_type)
+    if lhs_conv is not None:
+      lhs.append(lhs_conv)
+      lhs_ssa_value=lhs_conv.results[0]
 
-    if rhs_conv_type is not None:
-      rhs_conversion=fir.Convert.create(operands=[rhs_ssa_value], result_types=[rhs_conv_type])
-      rhs.append(rhs_conversion)
-      rhs_ssa_value=rhs_conversion.results[0]
+    rhs_conv=perform_data_conversion_if_needed(rhs_ssa_value, rhs_conv_type)
+    if rhs_conv is not None:
+      rhs.append(rhs_conv)
+      rhs_ssa_value=rhs_conv.results[0]
 
     #assert (lhs_ssa_value.typ == rhs_ssa_value.typ) or isinstance(lhs_ssa_value.typ, fir.ReferenceType) or isinstance(rhs_ssa_value.typ, fir.ReferenceType)
 
