@@ -425,8 +425,9 @@ def translate_gpu_loop(ctx: SSAValueCtx, gpu_stmt: Operation, program_state : Pr
   # For now empty block arguments, will be values in and out
   body = Region.from_operation_list(ops)
   gpu_fn=gpu.GPUFuncOp.from_region("gpu_fn_"+str(program_state.getNumGPUFns()), [], [], body)
+  end_op=gpu.ModuleEndOp.create()
   if gpu_module is None:
-    gpu_module=gpu.GPUModuleOp.from_region(Region.from_operation_list([gpu_fn]), "gpu_functions")
+    gpu_module=gpu.GPUModuleOp.from_region(Region.from_operation_list([gpu_fn, end_op]), "gpu_functions")
   else:
     pass # Need to add in ability to append GPU function here
     
