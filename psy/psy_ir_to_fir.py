@@ -1,9 +1,9 @@
 from __future__ import annotations
 from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerType, ArrayAttr, i32, i64, f32, f64, IndexType, DictionaryAttr,
       Float16Type, Float32Type, Float64Type, FlatSymbolRefAttr, FloatAttr, UnitAttr, DenseIntOrFPElementsAttr, VectorType, FlatSymbolRefAttr)
-from xdsl.dialects import func, arith, cf
+from xdsl.dialects import func, arith, cf, gpu
 from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext, BlockArgument
-from psy.dialects import psy_ir
+from psy.dialects import psy_ir, hpc_gpu
 
 from util.list_ops import flatten
 from ftn.dialects import fir
@@ -14,6 +14,8 @@ binary_arith_op_matching={"ADD": [arith.Addi, arith.Addf], "SUB":[arith.Subi, ar
 "MIN" : [arith.MinSI, arith.Minf], "MAX" : [arith.MaxSI, arith.Maxf]}
 
 binary_arith_psy_to_arith_comparison_op={"EQ": "eq", "NE": "ne", "GT": "sgt", "LT": "slt", "GE": "sge", "LE": "sle"}
+
+gpu_module=None
 
 @dataclass
 class SSAValueCtx:
@@ -47,12 +49,19 @@ class ProgramState:
     self.return_block=None
     self.imports={}
     self.globals=[]
+    self.num_gpu_fns=0;
 
   def setRoutineName(self, routine_name):
     self.routine_name=routine_name
 
   def unsetRoutineName(self):
     self.routine_name=None
+    
+  def getNumGPUFns(self):
+    return self.num_gpu_fns
+    
+  def incrementNumGPUFns(self):
+    self.num_gpu_fns+=1
 
   def getRoutineName(self):
     return self.routine_name
@@ -134,6 +143,10 @@ def translate_program(input_module: ModuleOp) -> ModuleOp:
 
     if len(globals_list) > 0:
       block.add_ops(globals_list)
+      
+    if gpu_module is not None:
+      block.add_ops([gpu_module])
+      
     body.add_block(block)
     return ModuleOp.from_region_or_ops(body)
 
@@ -379,12 +392,14 @@ def try_translate_stmt(ctx: SSAValueCtx,
       return translate_loop(ctx, op, program_state)
     if isinstance(op, psy_ir.Return):
       return translate_return(ctx, op, program_state)
+    if isinstance(op, hpc_gpu.GPULoop):
+      return translate_gpu_loop(ctx, op, program_state)
 
     res = None #try_translate_expr(ctx, op)
     if res is None:
         return None
     else:
-        return res[0]
+        return res[0]      
 
 def translate_stmt(ctx: SSAValueCtx, op: Operation, program_state : ProgramState) -> List[Operation]:
     """
@@ -397,6 +412,28 @@ def translate_stmt(ctx: SSAValueCtx, op: Operation, program_state : ProgramState
         raise Exception(f"Could not translate `{op}' as a statement")
     else:
         return ops
+        
+def translate_gpu_loop(ctx: SSAValueCtx, gpu_stmt: Operation, program_state : ProgramState) -> List[Operation]:
+  global gpu_module
+  ops: List[Operation] = []
+  for op in gpu_stmt.loop.blocks[0].ops:
+    stmt_ops = translate_stmt(ctx, op, program_state)
+    ops += stmt_ops  
+    
+  ops.append(gpu.ReturnOp.create())
+  
+  # For now empty block arguments, will be values in and out
+  body = Region.from_operation_list(ops)
+  gpu_fn=gpu.GPUFuncOp.from_region("gpu_fn_"+str(program_state.getNumGPUFns()), [], [], body)
+  if gpu_module is None:
+    gpu_module=gpu.GPUModuleOp.from_region(Region.from_operation_list([gpu_fn]), "gpu_functions")
+  else:
+    pass # Need to add in ability to append GPU function here
+    
+  # Hacking in the "@" character on the GPU function name here
+  launch_fn=gpu.LaunchFuncOp.create(attributes={"kernel":FlatSymbolRefAttr.from_str("gpu_fns.@gpu_fn_"+str(program_state.getNumGPUFns()))})
+  program_state.incrementNumGPUFns()
+  return [launch_fn]
 
 def translate_return(ctx: SSAValueCtx, return_stmt: psy_ir.Return, program_state : ProgramState) -> List[Operation]:
   return [cf.Branch.get(program_state.getReturnBlock())]
