@@ -209,7 +209,7 @@ class Routine(Operation):
       return not isinstance(self.attributes["return_var"], EmptyToken)
 
     def verify_(self) -> None:
-      pass 
+      pass
 
 @irdl_op_definition
 class ArrayReference(Operation):
@@ -472,6 +472,52 @@ class UnaryOperation(Operation):
       pass
 
 @irdl_op_definition
+class NaryOperation(Operation):
+    name = "psy.ir.naryoperation"
+
+    op = AttributeDef(StringAttr)
+    expr = SingleBlockRegionDef()
+
+    @staticmethod
+    def get_valid_ops() -> List[str]:
+        return ['MIN', 'MAX', 'SUM']
+
+    @staticmethod
+    def get(op: str,
+            args: List[Operation],
+            verify_op: bool = True) -> BinaryExpr:
+        res = UnaryOperation.build(attributes={"op": op}, regions=[args])
+        if verify_op:
+            # We don't verify nested operations since they might have already been verified
+            res.verify(verify_nested_ops=False)
+        return res
+
+    def verify_(self) -> None:
+      pass
+
+@irdl_op_definition
+class Range(Operation):
+    name = "psy.ir.range"
+
+    start =SingleBlockRegionDef()
+    stop =SingleBlockRegionDef()
+    step =SingleBlockRegionDef()
+
+    @staticmethod
+    def get(start: List[Operation],
+            stop: List[Operation],
+            step: List[Operation],
+            verify_op: bool = True) -> CallExpr:
+        res = Range.build(regions=[start, stop, step])
+        if verify_op:
+            # We don't verify nested operations since they might have already been verified
+            res.verify(verify_nested_ops=False)
+        return res
+
+    def verify_(self) -> None:
+      pass
+
+@irdl_op_definition
 class CallExpr(Operation):
     name = "psy.ir.call_expr"
 
@@ -480,7 +526,7 @@ class CallExpr(Operation):
     args = SingleBlockRegionDef()
 
     @staticmethod
-    def get(func: str,            
+    def get(func: str,
             args: List[Operation],
             type=EmptyAttr(),
             verify_op: bool = True) -> CallExpr:
@@ -497,7 +543,7 @@ class CallExpr(Operation):
 class psyIR:
     ctx: MLContext
 
-    def __post_init__(self):        
+    def __post_init__(self):
         self.ctx.register_attr(BoolAttr)
         self.ctx.register_attr(AnonymousAttr)
         self.ctx.register_attr(EmptyAttr)
@@ -523,6 +569,8 @@ class psyIR:
         self.ctx.register_op(StructureReference)
         self.ctx.register_op(BinaryOperation)
         self.ctx.register_op(UnaryOperation)
+        self.ctx.register_op(NaryOperation)
+        self.ctx.register_op(Range)
         self.ctx.register_op(CallExpr)
 
     @staticmethod
