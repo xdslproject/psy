@@ -533,6 +533,7 @@ class CallExpr(Operation):
     name = "psy.ir.call_expr"
 
     func = AttributeDef(StringAttr)
+    intrinsic = AttributeDef(BoolAttr)
     type= AttributeDef(AnyOf([NamedType, DerivedType, ArrayType, EmptyAttr]))
     args = SingleBlockRegionDef()
 
@@ -540,8 +541,9 @@ class CallExpr(Operation):
     def get(func: str,
             args: List[Operation],
             type=EmptyAttr(),
+            intrinsic=False,
             verify_op: bool = True) -> CallExpr:
-        res = CallExpr.build(regions=[args], attributes={"func": func, "type": type})
+        res = CallExpr.build(regions=[args], attributes={"func": func, "type": type, "intrinsic": intrinsic})
         if verify_op:
             # We don't verify nested operations since they might have already been verified
             res.verify(verify_nested_ops=False)
