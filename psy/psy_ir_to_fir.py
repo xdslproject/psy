@@ -1,5 +1,5 @@
 from __future__ import annotations
-from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerType, ArrayAttr, i32, i64, f32, f64, IndexType, DictionaryAttr,
+from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerType, ArrayAttr, i32, i64, f32, f64, IndexType, DictionaryAttr, IntAttr,
       Float16Type, Float32Type, Float64Type, FlatSymbolRefAttr, FloatAttr, UnitAttr, DenseIntOrFPElementsAttr, VectorType, FlatSymbolRefAttr)
 from xdsl.dialects import func, arith, cf, gpu
 from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext, BlockArgument
@@ -56,10 +56,10 @@ class ProgramState:
 
   def unsetRoutineName(self):
     self.routine_name=None
-    
+
   def getNumGPUFns(self):
     return self.num_gpu_fns
-    
+
   def incrementNumGPUFns(self):
     self.num_gpu_fns+=1
 
@@ -140,13 +140,17 @@ def translate_program(input_module: ModuleOp) -> ModuleOp:
       elif isinstance(top_level_entry, psy_ir.Container):
         print("NOT IMPLEMENTED")
         #containers.append(translate_container(global_ctx, top_level_entry))
+      elif isinstance(top_level_entry, psy_ir.Routine):
+        program_state = ProgramState()
+        block.add_op(translate_fun_def(global_ctx, top_level_entry, program_state))
+        globals_list.extend(program_state.getGlobals())
 
     if len(globals_list) > 0:
       block.add_ops(globals_list)
-      
+
     if gpu_module is not None:
       block.add_ops([gpu_module])
-      
+
     body.add_block(block)
     return ModuleOp.from_region_or_ops(body)
 
@@ -339,15 +343,34 @@ def define_array_var(ctx: SSAValueCtx,
                       var_def: psy_ast.VarDef, program_state : ProgramState) -> List[Operation]:
     var_name = var_def.var.var_name
     type = try_translate_type(var_def.var.type)
+    contains_deferred=does_array_type_contained_deferred(type)
 
-    undef=fir.Undefined.create(result_types=[type])
-    hasval=fir.HasValue.create(operands=[undef.results[0]])
+    region_args=[]
+    if contains_deferred:
+      heap_type=fir.HeapType([type])
+      type=fir.BoxType([heap_type])
+      zero_bits=fir.ZeroBits.create(result_types=[heap_type])
+      zero_val=arith.Constant.create(attributes={"value": IntegerAttr.from_index_int_value(0)},
+                                         result_types=[IndexType()])
+      shape=fir.Shape.create(operands=[zero_val.results[0]], result_types=[fir.ShapeType([IntAttr.from_int(1)])])
+      embox=fir.Embox.create(operands=[zero_bits.results[0], shape.results[0]], result_types=[type])
+      has_val=fir.HasValue.create(operands=[embox.results[0]])
+      region_args=[zero_bits, zero_val, shape, embox, has_val]
+    else:
+      undef=fir.Undefined.create(result_types=[type])
+      hasval=fir.HasValue.create(operands=[undef.results[0]])
+      region_args=[undef, hasval]
     glob=fir.Global.create(attributes={"linkName": StringAttr("internal"), "sym_name": StringAttr("_QFE"+var_name.data), "symref": FlatSymbolRefAttr.from_str("_QFE"+var_name.data), "type": type},
-          regions=[Region.from_operation_list([undef, hasval])])
+          regions=[Region.from_operation_list(region_args)])
     addr_lookup=fir.AddressOf.create(attributes={"symbol": FlatSymbolRefAttr.from_str("_QFE"+var_name.data)}, result_types=[fir.ReferenceType([type])])
     program_state.appendToGlobal(glob)
     ctx[var_name.data] = addr_lookup.results[0]
     return [addr_lookup]
+
+def does_array_type_contained_deferred(type):
+  for s in type.shape.data:
+    if isinstance(s, fir.DeferredAttr): return True
+  return False
 
 def translate_var_def(ctx: SSAValueCtx,
                       var_def: psy_ir.VarDef, program_state : ProgramState) -> List[Operation]:
@@ -361,6 +384,7 @@ def try_translate_type(op: Operation) -> Optional[Attribute]:
     if isinstance(op, psy_ir.NamedType):
       if op.type_name.data == "integer": return i32
       if op.type_name.data == "real":
+        if (isinstance(op.precision, psy_ir.EmptyAttr)): return f64
         if op.precision.data == 4: return f32
         if op.precision.data == 8: return f64
         raise Exception("Not sure how to interpret real")
@@ -369,7 +393,13 @@ def try_translate_type(op: Operation) -> Optional[Attribute]:
       array_shape=op.get_shape()
       array_size=[]
       for i in range(0,len(array_shape),2):
-        array_size.append((array_shape[i+1]-array_shape[i]) + 1)
+        if isinstance(array_shape[i], psy_ir.DeferredAttr):
+          array_size.append(fir.DeferredAttr())
+          i=i-1
+        else:
+          if isinstance(array_shape[i+1], int) and isinstance(array_shape[i], int):
+            array_size.append((array_shape[i+1]-array_shape[i]) + 1)
+
       arrayType=fir.ArrayType.from_type_and_list(try_translate_type(op.element_type), array_size)
       return arrayType
 
@@ -399,7 +429,7 @@ def try_translate_stmt(ctx: SSAValueCtx,
     if res is None:
         return None
     else:
-        return res[0]      
+        return res[0]
 
 def translate_stmt(ctx: SSAValueCtx, op: Operation, program_state : ProgramState) -> List[Operation]:
     """
@@ -412,16 +442,16 @@ def translate_stmt(ctx: SSAValueCtx, op: Operation, program_state : ProgramState
         raise Exception(f"Could not translate `{op}' as a statement")
     else:
         return ops
-        
+
 def translate_gpu_loop(ctx: SSAValueCtx, gpu_stmt: Operation, program_state : ProgramState) -> List[Operation]:
   global gpu_module
   ops: List[Operation] = []
   for op in gpu_stmt.loop.blocks[0].ops:
     stmt_ops = translate_stmt(ctx, op, program_state)
-    ops += stmt_ops  
-    
+    ops += stmt_ops
+
   ops.append(gpu.ReturnOp.create())
-  
+
   # For now empty block arguments, will be values in and out
   body = Region.from_operation_list(ops)
   gpu_fn=gpu.GPUFuncOp.from_region("gpu_fn_"+str(program_state.getNumGPUFns()), [], [], body)
@@ -430,7 +460,7 @@ def translate_gpu_loop(ctx: SSAValueCtx, gpu_stmt: Operation, program_state : Pr
     gpu_module=gpu.GPUModuleOp.from_region(Region.from_operation_list([gpu_fn, end_op]), "gpu_functions")
   else:
     pass # Need to add in ability to append GPU function here
-    
+
   # Hacking in the "@" character on the GPU function name here
   launch_fn=gpu.LaunchFuncOp.create(attributes={"kernel":FlatSymbolRefAttr.from_str("gpu_fns.@gpu_fn_"+str(program_state.getNumGPUFns()))})
   program_state.incrementNumGPUFns()
@@ -549,15 +579,24 @@ def translate_call_expr_stmt(ctx: SSAValueCtx,
           args.append(arg)
 
     name = call_expr.attributes["func"]
-    assert program_state.hasImport(name.data)
-    full_name=generateProcedurePrefixWithModuleName(program_state.getImportModule(name.data), name.data, "P")
-    # Need return type here for expression
-    if is_expr:
-      result_type=try_translate_type(call_expr.type)
-      call = fir.Call.create(attributes={"callee": FlatSymbolRefAttr.from_str(full_name)}, operands=args, result_types=[result_type])
+    if name.data == "allocate":
+      #call=fir.Allocmem.create(operands=args)
+      #ops.append(call)
+      pass
+    elif name.data == "deallocate":
+      #call=fir.Allocmem.create(operands=args)
+      #ops.append(call)
+      pass
     else:
-      call = fir.Call.create(attributes={"callee": FlatSymbolRefAttr.from_str(full_name)}, operands=args, result_types=[])
-    ops.append(call)
+      assert program_state.hasImport(name.data)
+      full_name=generateProcedurePrefixWithModuleName(program_state.getImportModule(name.data), name.data, "P")
+      # Need return type here for expression
+      if is_expr:
+        result_type=try_translate_type(call_expr.type)
+        call = fir.Call.create(attributes={"callee": FlatSymbolRefAttr.from_str(full_name)}, operands=args, result_types=[result_type])
+      else:
+        call = fir.Call.create(attributes={"callee": FlatSymbolRefAttr.from_str(full_name)}, operands=args, result_types=[])
+      ops.append(call)
     return ops
 
 def translate_expr(ctx: SSAValueCtx,
@@ -599,6 +638,8 @@ def try_translate_expr(
         result_type=f32
       elif isinstance(ssa_value.typ.type, fir.ArrayType):
         # Already have created the addressof reference so just return this
+        return None, ssa_value
+      elif isinstance(ssa_value.typ.type, fir.BoxType):
         return None, ssa_value
 
       op=fir.Load.create(operands=[ssa_value], result_types=[result_type])
