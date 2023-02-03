@@ -70,6 +70,10 @@ class NamedType(ParametrizedAttribute):
 class AnonymousAttr(ParametrizedAttribute):
     name = "anonymous"
 
+@irdl_attr_definition
+class DeferredAttr(ParametrizedAttribute):
+    name = "deferred"
+
 # Ideally would use vector, but need unknown dimension types (and ranges too!)
 @irdl_attr_definition
 class ArrayType(ParametrizedAttribute):
@@ -82,7 +86,14 @@ class ArrayType(ParametrizedAttribute):
         return len(self.parameters[0].data)
 
     def get_shape(self) -> List[int]:
-        return [i.parameters[0].data for i in self.shape.data]
+        shape=[]
+        for i in self.shape.data:
+          if isinstance(i, DeferredAttr) or len(i.parameters) == 0:
+            shape.append(DeferredAttr())
+          else:
+            shape.append(i.parameters[0].data)
+
+        return shape
 
     @staticmethod
     @builder
@@ -546,6 +557,7 @@ class psyIR:
     def __post_init__(self):
         self.ctx.register_attr(BoolAttr)
         self.ctx.register_attr(AnonymousAttr)
+        self.ctx.register_attr(DeferredAttr)
         self.ctx.register_attr(EmptyAttr)
         self.ctx.register_attr(DerivedType)
         self.ctx.register_attr(NamedType)
