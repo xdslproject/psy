@@ -575,6 +575,33 @@ def translate_intrinsic_call_expr(ctx: SSAValueCtx,
     intrinsic_name=call_expr.attributes["func"].data
     if intrinsic_name == "allocate":
       return translate_allocate_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
+    if intrinsic_name == "deallocate":
+      return translate_deallocate_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
+
+def translate_deallocate_intrinsic_call_expr(ctx: SSAValueCtx,
+                             call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
+
+    if len(call_expr.args.blocks[0].ops) != 1:
+      raise Exception(f"For deallocate expected 1 argument but {len(call_expr.args.blocks[0].ops)} are present")
+
+    op, arg = translate_expr(ctx, call_expr.args.blocks[0].ops[0], program_state)
+    target_ssa=arg
+
+    box_type=get_nested_type(target_ssa.typ, fir.BoxType)
+    heap_type=get_nested_type(target_ssa.typ, fir.HeapType)
+
+    load_op=fir.Load.create(operands=[target_ssa], result_types=[box_type])
+    box_addr_op=fir.BoxAddr.create(operands=[load_op.results[0]], result_types=[heap_type])
+    freemem_op=fir.Freemem.create(operands=[box_addr_op.results[0]])
+    zero_bits_op=fir.ZeroBits.create(result_types=[heap_type])
+    zero_val_op=arith.Constant.create(attributes={"value": IntegerAttr.from_index_int_value(0)},
+                                         result_types=[IndexType()])
+    shape_op=fir.Shape.create(operands=[zero_val_op.results[0]], result_types=[fir.ShapeType([IntAttr.from_int(1)])])
+    embox_op=fir.Embox.create(operands=[zero_bits_op.results[0], shape_op.results[0]], result_types=[box_type])
+    store_op=fir.Store.create(operands=[embox_op.results[0], target_ssa])
+
+    return [load_op, box_addr_op, freemem_op, zero_bits_op, zero_val_op, shape_op, embox_op, store_op]
+
 
 def translate_allocate_intrinsic_call_expr(ctx: SSAValueCtx,
                              call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
