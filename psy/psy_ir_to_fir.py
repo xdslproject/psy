@@ -343,16 +343,19 @@ def define_array_var(ctx: SSAValueCtx,
                       var_def: psy_ast.VarDef, program_state : ProgramState) -> List[Operation]:
     var_name = var_def.var.var_name
     type = try_translate_type(var_def.var.type)
-    contains_deferred=does_array_type_contained_deferred(type)
+    num_deferred=count_array_type_contains_deferred(type)
 
     region_args=[]
-    if contains_deferred:
+    if num_deferred:
       heap_type=fir.HeapType([type])
       type=fir.BoxType([heap_type])
       zero_bits=fir.ZeroBits.create(result_types=[heap_type])
       zero_val=arith.Constant.create(attributes={"value": IntegerAttr.from_index_int_value(0)},
                                          result_types=[IndexType()])
-      shape=fir.Shape.create(operands=[zero_val.results[0]], result_types=[fir.ShapeType([IntAttr.from_int(1)])])
+      shape_ops=[]
+      for i in range(num_deferred):
+        shape_ops.append(zero_val.results[0])
+      shape=fir.Shape.create(operands=shape_ops, result_types=[fir.ShapeType([IntAttr.from_int(num_deferred)])])
       embox=fir.Embox.create(operands=[zero_bits.results[0], shape.results[0]], result_types=[type])
       has_val=fir.HasValue.create(operands=[embox.results[0]])
       region_args=[zero_bits, zero_val, shape, embox, has_val]
@@ -367,10 +370,12 @@ def define_array_var(ctx: SSAValueCtx,
     ctx[var_name.data] = addr_lookup.results[0]
     return [addr_lookup]
 
-def does_array_type_contained_deferred(type):
+def count_array_type_contains_deferred(type):
+  occurances=0
   for s in type.shape.data:
-    if isinstance(s, fir.DeferredAttr): return True
-  return False
+    if isinstance(s, fir.DeferredAttr):
+      occurances+=1
+  return occurances
 
 def translate_var_def(ctx: SSAValueCtx,
                       var_def: psy_ir.VarDef, program_state : ProgramState) -> List[Operation]:
@@ -392,13 +397,15 @@ def try_translate_type(op: Operation) -> Optional[Attribute]:
     elif isinstance(op, psy_ir.ArrayType):
       array_shape=op.get_shape()
       array_size=[]
-      for i in range(0,len(array_shape),2):
+      for i in range(0,len(array_shape),1):
         if isinstance(array_shape[i], psy_ir.DeferredAttr):
           array_size.append(fir.DeferredAttr())
-          i=i-1
         else:
           if isinstance(array_shape[i+1], int) and isinstance(array_shape[i], int):
             array_size.append((array_shape[i+1]-array_shape[i]) + 1)
+            # Increment i now (will go up by two based on this and next loop round
+            # as have done low to high size)
+            i=i+1
 
       arrayType=fir.ArrayType.from_type_and_list(try_translate_type(op.element_type), array_size)
       return arrayType
@@ -589,6 +596,8 @@ def translate_deallocate_intrinsic_call_expr(ctx: SSAValueCtx,
 
     box_type=get_nested_type(target_ssa.typ, fir.BoxType)
     heap_type=get_nested_type(target_ssa.typ, fir.HeapType)
+    array_type=get_nested_type(target_ssa.typ, fir.ArrayType)
+    num_deferred=count_array_type_contains_deferred(array_type)
 
     load_op=fir.Load.create(operands=[target_ssa], result_types=[box_type])
     box_addr_op=fir.BoxAddr.create(operands=[load_op.results[0]], result_types=[heap_type])
@@ -596,7 +605,10 @@ def translate_deallocate_intrinsic_call_expr(ctx: SSAValueCtx,
     zero_bits_op=fir.ZeroBits.create(result_types=[heap_type])
     zero_val_op=arith.Constant.create(attributes={"value": IntegerAttr.from_index_int_value(0)},
                                          result_types=[IndexType()])
-    shape_op=fir.Shape.create(operands=[zero_val_op.results[0]], result_types=[fir.ShapeType([IntAttr.from_int(1)])])
+    shape_operands=[]
+    for i in range(num_deferred):
+      shape_operands.append(zero_val_op.results[0])
+    shape_op=fir.Shape.create(operands=shape_operands, result_types=[fir.ShapeType([IntAttr.from_int(num_deferred)])])
     embox_op=fir.Embox.create(operands=[zero_bits_op.results[0], shape_op.results[0]], result_types=[box_type])
     store_op=fir.Store.create(operands=[embox_op.results[0], target_ssa])
 
