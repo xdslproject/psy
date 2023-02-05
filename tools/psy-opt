@@ -14,6 +14,7 @@ from psy.apply_stencil import apply_stencil_analysis
 
 from psy.dialects.psy_ir import psyIR
 from psy.dialects.hstencil import HStencil
+from psy.dialects.stencil import Stencil
 from ftn.dialects.fir import Fir
 from util.semantic_error import SemanticError
 
@@ -49,6 +50,7 @@ class PsyOptMain(xDSLOptMain):
         psy_ir = psyIR(self.ctx)        
         ftn_fir = Fir(self.ctx) 
         hstencil = HStencil(self.ctx)
+        stencil = Stencil(self.ctx)
 
     @staticmethod
     def get_passes_as_dict(

@@ -3,7 +3,7 @@ from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerTyp
       Float16Type, Float32Type, Float64Type, FlatSymbolRefAttr, FloatAttr, UnitAttr, DenseIntOrFPElementsAttr, VectorType, FlatSymbolRefAttr)
 from xdsl.dialects import func, arith, cf, gpu
 from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext, BlockArgument
-from psy.dialects import psy_ir, hpc_gpu
+from psy.dialects import psy_ir, hpc_gpu, hstencil, stencil
 
 from util.list_ops import flatten
 from ftn.dialects import fir
@@ -117,7 +117,7 @@ def psy_ir_to_fir(ctx: MLContext, input_module: ModuleOp):
     #applyModuleUseToFloatingRegions(res_module, collectContainerNames(res_module))
     res_module.regions[0].move_blocks(input_module.regions[0])
     # Create program entry point
-    check_program_entry_point(input_module)
+    #check_program_entry_point(input_module)
 
 def check_program_entry_point(module: ModuleOp):
   for op in module.ops:
@@ -397,7 +397,8 @@ def try_translate_type(op: Operation) -> Optional[Attribute]:
     elif isinstance(op, psy_ir.ArrayType):
       array_shape=op.get_shape()
       array_size=[]
-      for i in range(0,len(array_shape),1):
+      i=0
+      while i<len(array_shape):
         if isinstance(array_shape[i], psy_ir.DeferredAttr):
           array_size.append(fir.DeferredAttr())
         else:
@@ -405,7 +406,8 @@ def try_translate_type(op: Operation) -> Optional[Attribute]:
             array_size.append((array_shape[i+1]-array_shape[i]) + 1)
             # Increment i now (will go up by two based on this and next loop round
             # as have done low to high size)
-            i=i+1
+          i+=1
+        i+=1
 
       arrayType=fir.ArrayType.from_type_and_list(try_translate_type(op.element_type), array_size)
       return arrayType
@@ -431,6 +433,10 @@ def try_translate_stmt(ctx: SSAValueCtx,
       return translate_return(ctx, op, program_state)
     if isinstance(op, hpc_gpu.GPULoop):
       return translate_gpu_loop(ctx, op, program_state)
+    if isinstance(op, hstencil.HStencil_Stencil):
+      return translate_hstencil_stencil(ctx, op, program_state)
+    if isinstance(op, hstencil.HStencil_Result):
+      return translate_hstencil_result(ctx, op, program_state)
 
     res = None #try_translate_expr(ctx, op)
     if res is None:
@@ -449,6 +455,49 @@ def translate_stmt(ctx: SSAValueCtx, op: Operation, program_state : ProgramState
         raise Exception(f"Could not translate `{op}' as a statement")
     else:
         return ops
+
+def translate_hstencil_access(ctx: SSAValueCtx, stencil_access: Operation, program_state : ProgramState) -> List[Operation]:
+  access_op=stencil.Access.build(attributes={"offset": stencil_access.stencil_ops}, operands=[ctx[stencil_access.var.var_name.data]], result_types=[f64])
+  return [access_op], access_op.results[0]
+
+def translate_hstencil_result(ctx: SSAValueCtx, stencil_result: Operation, program_state : ProgramState) -> List[Operation]:
+  ops: List[Operation] = []
+  for op in stencil_result.stencil_accesses.blocks[0].ops:
+    stmt_ops, ssa = translate_expr(ctx, op, program_state)
+    ops += stmt_ops
+
+  rt=stencil.ResultType([f64])
+
+  store_result_op=stencil.StoreResult.create(operands=[ops[-1].results[0]], result_types=[rt])
+  return_op=stencil.Return.create(operands=[store_result_op.results[0]])
+  ops+=[store_result_op, return_op]
+
+  block=Block()
+  block.add_ops(ops)
+  body=Region()
+  body.add_block(block)
+
+  apply_op=stencil.Apply.create(operands=[ctx[stencil_result.var.var_name.data]], regions=[body], result_types=[stencil.TempType.from_shape([256,256,256])])
+
+  return [apply_op  ]
+
+def translate_hstencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, program_state : ProgramState) -> List[Operation]:
+  ops: List[Operation] = []
+  new_ctx=SSAValueCtx()
+  for field in stencil_stmt.input_fields.data:
+    cast_op=stencil.Load.build(operands=[ctx[field.var_name.data]], result_types=[stencil.TempType.from_shape([256,256,256])])
+    ops.append(cast_op)
+    new_ctx[field.var_name.data]=cast_op.results[0]
+
+  for op in stencil_stmt.body.blocks[0].ops:
+    stmt_ops = translate_stmt(new_ctx, op, program_state)
+    ops += stmt_ops
+
+  out_var=stencil_stmt.output_fields.data[0].var_name.data
+  store_op=stencil.Store.create(operands=[ops[-1].results[0], ctx[out_var]])
+  ops.append(store_op)
+
+  return ops
 
 def translate_gpu_loop(ctx: SSAValueCtx, gpu_stmt: Operation, program_state : ProgramState) -> List[Operation]:
   global gpu_module
@@ -728,7 +777,10 @@ def try_translate_expr(
       return call_expr, call_expr[-1].results[0]
     if isinstance(op, psy_ir.ArrayReference):
       return translate_array_reference_expr(ctx, op, program_state)
+    if isinstance(op, hstencil.HStencil_Access):
+      return translate_hstencil_access(ctx, op, program_state)
 
+    print(type(op))
     assert False, "Unknown Expression"
 
 def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, program_state : ProgramState):
