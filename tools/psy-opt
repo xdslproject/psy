@@ -10,8 +10,10 @@ from xdsl.dialects.builtin import ModuleOp
 from psy.psy_ftn_printer import print_fortran
 from psy.psy_ir_to_fir import psy_ir_to_fir
 from psy.apply_gpu import apply_gpu_analysis
+from psy.apply_stencil import apply_stencil_analysis
 
 from psy.dialects.psy_ir import psyIR
+from psy.dialects.hstencil import HStencil
 from ftn.dialects.fir import Fir
 from util.semantic_error import SemanticError
 
@@ -23,7 +25,8 @@ class PsyOptMain(xDSLOptMain):
 
     passes_native = [       
       psy_ir_to_fir,
-      apply_gpu_analysis
+      apply_gpu_analysis,
+      apply_stencil_analysis
     ]
 
     def register_all_passes(self):
@@ -45,6 +48,7 @@ class PsyOptMain(xDSLOptMain):
         """Register all dialects that can be used."""        
         psy_ir = psyIR(self.ctx)        
         ftn_fir = Fir(self.ctx) 
+        hstencil = HStencil(self.ctx)
 
     @staticmethod
     def get_passes_as_dict(
