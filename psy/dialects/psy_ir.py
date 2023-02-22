@@ -5,8 +5,8 @@ from typing import List, Optional, Type, Union
 
 from xdsl.dialects.builtin import IntegerAttr, StringAttr, ArrayAttr, ArrayOfConstraint, AnyAttr, IntAttr, FloatAttr
 from xdsl.ir import Data, MLContext, Operation, ParametrizedAttribute
-from xdsl.irdl import (AnyOf, AttributeDef, SingleBlockRegionDef, builder, ParameterDef,
-                       irdl_attr_definition, irdl_op_definition)
+from xdsl.irdl import (AnyOf, ParameterDef, irdl_attr_definition, irdl_op_definition
+                       , OpAttr, SingleBlockRegion)
 from xdsl.parser import Parser
 from xdsl.printer import Printer
 
@@ -28,7 +28,6 @@ class BoolAttr(Data[bool]):
         printer.print_string(f'"{data}"')
 
     @staticmethod
-    @builder
     def from_bool(data: bool) -> BoolAttr:
         return BoolAttr(data)
 
@@ -39,12 +38,10 @@ class DerivedType(ParametrizedAttribute):
     type : ParameterDef[StringAttr]
 
     @staticmethod
-    @builder
     def from_str(type: str) -> DerivedType:
         return DerivedType([StringAttr.from_str(type)])
 
     @staticmethod
-    @builder
     def from_string_attr(data: StringAttr) -> DerivedType:
         return DerivedType([data])
 
@@ -96,7 +93,6 @@ class ArrayType(ParametrizedAttribute):
         return shape
 
     @staticmethod
-    @builder
     def from_type_and_list(
             referenced_type: Attribute,
             shape: List[Union[int, IntegerAttr, AnonymousAttr]] = None) -> ArrayType:
@@ -112,7 +108,6 @@ class ArrayType(ParametrizedAttribute):
         )
 
     @staticmethod
-    @builder
     def from_params(
         referenced_type: Attribute,
         shape: ArrayAttr) -> ArrayType:
@@ -122,8 +117,8 @@ class ArrayType(ParametrizedAttribute):
 class FileContainer(Operation):
     name = "psy.ir.filecontainer"
 
-    file_name = AttributeDef(StringAttr)
-    children = SingleBlockRegionDef()
+    file_name: OpAttr[StringAttr]
+    children: SingleBlockRegion
 
     @staticmethod
     def get(file_name: str,
@@ -141,13 +136,13 @@ class FileContainer(Operation):
 class Container(Operation):
     name = "psy.ir.container"
 
-    container_name = AttributeDef(StringAttr)
-    imports = SingleBlockRegionDef()
-    routines = SingleBlockRegionDef()
-    default_visibility = AttributeDef(StringAttr)
-    is_program = AttributeDef(BoolAttr)
-    public_routines = AttributeDef(ArrayAttr)
-    private_routines = AttributeDef(ArrayAttr)
+    container_name: OpAttr[StringAttr]
+    imports: SingleBlockRegion
+    routines: SingleBlockRegion
+    default_visibility: OpAttr[StringAttr]
+    is_program: OpAttr[BoolAttr]
+    public_routines: OpAttr[ArrayAttr]
+    private_routines: OpAttr[ArrayAttr]
 
     @staticmethod
     def get(container_name: str,
@@ -157,8 +152,9 @@ class Container(Operation):
             imports: List[Operation],
             routines: List[Operation],
             verify_op: bool = True) -> Container:
-      res = Container.build(attributes={"container_name": container_name, "default_visibility": default_visibility, "is_program": False,
-                                        "public_routines": ArrayAttr.from_list(public_routines), "private_routines": ArrayAttr.from_list(private_routines)},
+      res = Container.build(attributes={"container_name": container_name, "default_visibility": default_visibility, 
+                                        "is_program": False, "public_routines": ArrayAttr.from_list(public_routines), 
+                                        "private_routines": ArrayAttr.from_list(private_routines)},
                                         regions=[imports, routines])
       if verify_op:
         res.verify(verify_nested_ops=False)
@@ -171,8 +167,8 @@ class Container(Operation):
 class Import(Operation):
     name = "psy.ir.import"
 
-    import_name=AttributeDef(StringAttr)
-    specific_procedures=AttributeDef(ArrayAttr)
+    import_name: OpAttr[StringAttr]
+    specific_procedures: OpAttr[ArrayAttr]
 
     @staticmethod
     def get(import_name: str,
@@ -190,13 +186,13 @@ class Import(Operation):
 class Routine(Operation):
     name = "psy.ir.routine"
 
-    routine_name = AttributeDef(StringAttr)
-    imports = SingleBlockRegionDef()
-    args = AttributeDef(ArrayAttr)
-    return_var = AttributeDef(AnyAttr())
-    local_var_declarations = SingleBlockRegionDef()
-    routine_body = SingleBlockRegionDef()
-    is_program = AttributeDef(BoolAttr)
+    routine_name: OpAttr[StringAttr]
+    imports: SingleBlockRegion
+    args: OpAttr[ArrayAttr]
+    return_var: OpAttr[AnyAttr()]
+    local_var_declarations: SingleBlockRegion
+    routine_body: SingleBlockRegion
+    is_program: OpAttr[BoolAttr]
 
     @staticmethod
     def get(routine_name: Union[str, StringAttr],
@@ -209,8 +205,9 @@ class Routine(Operation):
             verify_op: bool = True) -> Routine:
         if return_var is None:
           return_var=EmptyToken()
-        res = Routine.build(attributes={"routine_name": routine_name, "return_var": return_var, "args": ArrayAttr.from_list(args), "is_program": is_program},
-                            regions=[imports, local_var_declarations, routine_body])
+        res = Routine.build(attributes={"routine_name": routine_name, "return_var": return_var, 
+                                        "args": ArrayAttr.from_list(args), "is_program": is_program},
+                                        regions=[imports, local_var_declarations, routine_body])
         if verify_op:
             # We don't verify nested operations since they might have already been verified
             res.verify(verify_nested_ops=False)
@@ -226,8 +223,8 @@ class Routine(Operation):
 class ArrayReference(Operation):
     name="psy.ir.array_reference"
 
-    var = AttributeDef(AnyAttr())
-    accessors = SingleBlockRegionDef()
+    var: OpAttr[AnyAttr()]
+    accessors: SingleBlockRegion
 
     @staticmethod
     def get(var,
@@ -244,8 +241,8 @@ class ArrayReference(Operation):
 class ExprName(Operation):
     name = "psy.ir.id_expr"
 
-    id = AttributeDef(StringAttr)
-    var= AttributeDef(AnyAttr())
+    id: OpAttr[StringAttr]
+    var: OpAttr[AnyAttr()]
 
     @staticmethod
     def get(name: Union[str, StringAttr], v, verify_op: bool = True) -> ExprName:
@@ -266,8 +263,8 @@ class StructureMember(ParametrizedAttribute):
 class StructureReference(Operation):
     name = "psy.ir.structure_reference"
 
-    var = AttributeDef(AnyAttr())
-    member = AttributeDef(AnyAttr())
+    var: OpAttr[AnyAttr()]
+    member: OpAttr[AnyAttr()]
 
     @staticmethod
     def get(var, member: Union[str, StringAttr], verify_op: bool = True) -> ExprName:
@@ -292,10 +289,10 @@ class EmptyToken(EmptyAttr):
 class VarDef(Operation):
     name = "psy.ir.var_def"
 
-    var= AttributeDef(AnyAttr())
-    is_proc_argument = AttributeDef(BoolAttr)
-    is_constant = AttributeDef(BoolAttr)
-    intent = AttributeDef(StringAttr)
+    var: OpAttr[AnyAttr()]
+    is_proc_argument: OpAttr[BoolAttr]
+    is_constant: OpAttr[BoolAttr]
+    intent: OpAttr[StringAttr]
 
     @staticmethod
     def get(var,
@@ -317,8 +314,8 @@ class VarDef(Operation):
 class Assign(Operation):
     name = "psy.ir.assign"
 
-    lhs = SingleBlockRegionDef()
-    rhs = SingleBlockRegionDef()
+    lhs: SingleBlockRegion
+    rhs: SingleBlockRegion
 
     @staticmethod
     def get(lhs: Operation,
@@ -337,7 +334,7 @@ class Assign(Operation):
 class Literal(Operation):
     name = "psy.ir.literal"
 
-    value = AttributeDef(AnyOf([StringAttr, IntegerAttr, FloatAttr]))
+    value: OpAttr[AnyOf([StringAttr, IntegerAttr, FloatAttr])]
 
     @staticmethod
     def get(value: Union[None, bool, int, str, float], width=None,
@@ -360,9 +357,9 @@ class Literal(Operation):
 class IfBlock(Operation):
     name = "psy.ir.ifblock"
 
-    cond = SingleBlockRegionDef()
-    then = SingleBlockRegionDef()
-    orelse = SingleBlockRegionDef()
+    cond: SingleBlockRegion
+    then: SingleBlockRegion
+    orelse: SingleBlockRegion
 
     @staticmethod
     def get(cond: Operation,
@@ -382,11 +379,11 @@ class IfBlock(Operation):
 class Loop(Operation):
     name = "psy.ir.loop"
 
-    variable = AttributeDef(AnyAttr())
-    start = SingleBlockRegionDef()
-    stop = SingleBlockRegionDef()
-    step = SingleBlockRegionDef()
-    body = SingleBlockRegionDef()
+    variable: OpAttr[AnyAttr()]
+    start: SingleBlockRegion
+    stop: SingleBlockRegion
+    step: SingleBlockRegion
+    body: SingleBlockRegion
 
     @staticmethod
     def get(variable,
@@ -412,9 +409,9 @@ class Return(Operation):
 class BinaryOperation(Operation):
     name = "psy.ir.binaryoperation"
 
-    op = AttributeDef(StringAttr)
-    lhs = SingleBlockRegionDef()
-    rhs = SingleBlockRegionDef()
+    op: OpAttr[StringAttr]
+    lhs: SingleBlockRegion
+    rhs: SingleBlockRegion
 
     @staticmethod
     def get_valid_ops() -> List[str]:
@@ -452,8 +449,8 @@ class BinaryOperation(Operation):
 class UnaryOperation(Operation):
     name = "psy.ir.unaryoperation"
 
-    op = AttributeDef(StringAttr)
-    expr = SingleBlockRegionDef()
+    op: OpAttr[StringAttr]
+    expr: SingleBlockRegion
 
     @staticmethod
     def get_valid_ops() -> List[str]:
@@ -486,8 +483,8 @@ class UnaryOperation(Operation):
 class NaryOperation(Operation):
     name = "psy.ir.naryoperation"
 
-    op = AttributeDef(StringAttr)
-    expr = SingleBlockRegionDef()
+    op: OpAttr[StringAttr]
+    expr: SingleBlockRegion
 
     @staticmethod
     def get_valid_ops() -> List[str]:
@@ -510,9 +507,9 @@ class NaryOperation(Operation):
 class Range(Operation):
     name = "psy.ir.range"
 
-    start =SingleBlockRegionDef()
-    stop =SingleBlockRegionDef()
-    step =SingleBlockRegionDef()
+    start: SingleBlockRegion
+    stop: SingleBlockRegion
+    step: SingleBlockRegion
 
     @staticmethod
     def get(start: List[Operation],
@@ -532,10 +529,10 @@ class Range(Operation):
 class CallExpr(Operation):
     name = "psy.ir.call_expr"
 
-    func = AttributeDef(StringAttr)
-    intrinsic = AttributeDef(BoolAttr)
-    type= AttributeDef(AnyOf([NamedType, DerivedType, ArrayType, EmptyAttr]))
-    args = SingleBlockRegionDef()
+    func: OpAttr[StringAttr]
+    intrinsic: OpAttr[BoolAttr]
+    type: OpAttr[AnyOf([NamedType, DerivedType, ArrayType, EmptyAttr])]
+    args: SingleBlockRegion
 
     @staticmethod
     def get(func: str,
