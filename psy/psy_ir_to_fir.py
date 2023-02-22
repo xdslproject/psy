@@ -1,9 +1,10 @@
 from __future__ import annotations
 from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerType, ArrayAttr, i32, i64, f32, f64, IndexType, DictionaryAttr, IntAttr,
-      Float16Type, Float32Type, Float64Type, FlatSymbolRefAttr, FloatAttr, UnitAttr, DenseIntOrFPElementsAttr, VectorType, FlatSymbolRefAttr)
-from xdsl.dialects import func, arith, cf, gpu
+      Float16Type, Float32Type, Float64Type, FloatAttr, UnitAttr, DenseIntOrFPElementsAttr, VectorType, SymbolRefAttr)
+from xdsl.dialects import func, arith, cf #, gpu
 from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext, BlockArgument
-from psy.dialects import psy_ir, hpc_gpu, hstencil, stencil
+from psy.dialects import psy_ir, hstencil #, hpc_gpu,
+from xdsl.dialects.experimental import stencil
 
 from util.list_ops import flatten
 from ftn.dialects import fir
@@ -363,9 +364,9 @@ def define_array_var(ctx: SSAValueCtx,
       undef=fir.Undefined.create(result_types=[type])
       hasval=fir.HasValue.create(operands=[undef.results[0]])
       region_args=[undef, hasval]
-    glob=fir.Global.create(attributes={"linkName": StringAttr("internal"), "sym_name": StringAttr("_QFE"+var_name.data), "symref": FlatSymbolRefAttr.from_str("_QFE"+var_name.data), "type": type},
+    glob=fir.Global.create(attributes={"linkName": StringAttr("internal"), "sym_name": StringAttr("_QFE"+var_name.data), "symref": SymbolRefAttr.from_str("_QFE"+var_name.data), "type": type},
           regions=[Region.from_operation_list(region_args)])
-    addr_lookup=fir.AddressOf.create(attributes={"symbol": FlatSymbolRefAttr.from_str("_QFE"+var_name.data)}, result_types=[fir.ReferenceType([type])])
+    addr_lookup=fir.AddressOf.create(attributes={"symbol": SymbolRefAttr.from_str("_QFE"+var_name.data)}, result_types=[fir.ReferenceType([type])])
     program_state.appendToGlobal(glob)
     ctx[var_name.data] = addr_lookup.results[0]
     return [addr_lookup]
@@ -518,7 +519,7 @@ def translate_gpu_loop(ctx: SSAValueCtx, gpu_stmt: Operation, program_state : Pr
     pass # Need to add in ability to append GPU function here
 
   # Hacking in the "@" character on the GPU function name here
-  launch_fn=gpu.LaunchFuncOp.create(attributes={"kernel":FlatSymbolRefAttr.from_str("gpu_fns.@gpu_fn_"+str(program_state.getNumGPUFns()))})
+  launch_fn=gpu.LaunchFuncOp.create(attributes={"kernel":SymbolRefAttr.from_str("gpu_fns.@gpu_fn_"+str(program_state.getNumGPUFns()))})
   program_state.incrementNumGPUFns()
   return [launch_fn]
 
@@ -716,9 +717,9 @@ def translate_user_call_expr(ctx: SSAValueCtx,
     # Need return type here for expression
     if is_expr:
       result_type=try_translate_type(call_expr.type)
-      call = fir.Call.create(attributes={"callee": FlatSymbolRefAttr.from_str(full_name)}, operands=args, result_types=[result_type])
+      call = fir.Call.create(attributes={"callee": SymbolRefAttr.from_str(full_name)}, operands=args, result_types=[result_type])
     else:
-      call = fir.Call.create(attributes={"callee": FlatSymbolRefAttr.from_str(full_name)}, operands=args, result_types=[])
+      call = fir.Call.create(attributes={"callee": SymbolRefAttr.from_str(full_name)}, operands=args, result_types=[])
     ops.append(call)
     return ops
 
