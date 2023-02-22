@@ -5,7 +5,7 @@ from xdsl.pattern_rewriter import (GreedyRewritePatternApplier,
                                    PatternRewriter, PatternRewriteWalker,
                                    RewritePattern, op_type_rewrite_pattern)
 
-from psy.dialects import psy_ir, hpc_gpu, hstencil
+from psy.dialects import psy_ir, hstencil
 from util.visitor import Visitor
 from enum import Enum
 
