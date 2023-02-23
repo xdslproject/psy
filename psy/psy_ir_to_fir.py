@@ -504,9 +504,9 @@ def translate_hstencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, progra
   for field in stencil_stmt.input_fields.data:
     assert isinstance(field.type, psy_ir.ArrayType)
     array_sizes=get_array_sizes(field.type)
-    cast_op=stencil.Cast.build(operands=[ctx[field.var_name.data]], result_types=[stencil.FieldType.from_shape(array_sizes)])
-    load_op=stencil.Load.build(operands=[cast_op.results[0]], result_types=[stencil.TempType.from_shape(array_sizes)])
-    ops+=[cast_op, load_op]
+    external_load_op=stencil.External_Load.build(operands=[ctx[field.var_name.data]], result_types=[stencil.FieldType.from_shape(array_sizes)])
+    load_op=stencil.Load.build(operands=[external_load_op.results[0]], result_types=[stencil.TempType.from_shape(array_sizes)])
+    ops+=[external_load_op, load_op]
     new_ctx[field.var_name.data]=load_op.results[0]
 
   for op in stencil_stmt.body.blocks[0].ops:
@@ -514,8 +514,9 @@ def translate_hstencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, progra
     ops += stmt_ops
 
   out_var=stencil_stmt.output_fields.data[0].var_name.data
-  store_op=stencil.Store.create(operands=[ops[-1].results[0], ctx[out_var]])
-  ops.append(store_op)
+  store_op=stencil.Store.create(operands=[ops[-1].results[0], external_load_op.results[0]])
+  external_store_op=stencil.External_Store.create(operands=[external_load_op.results[0], ctx[out_var]])
+  ops+=[store_op, external_store_op]
 
   return ops
 
