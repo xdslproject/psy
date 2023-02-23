@@ -3,7 +3,7 @@ from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerTyp
       Float16Type, Float32Type, Float64Type, FloatAttr, UnitAttr, DenseIntOrFPElementsAttr, VectorType, SymbolRefAttr)
 from xdsl.dialects import func, arith, cf #, gpu
 from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext, BlockArgument
-from psy.dialects import psy_ir, hstencil #, hpc_gpu,
+from psy.dialects import psy_ir, hstencil #, hpc_gpu
 from xdsl.dialects.experimental import stencil
 
 from util.list_ops import flatten
@@ -432,8 +432,8 @@ def try_translate_stmt(ctx: SSAValueCtx,
       return translate_loop(ctx, op, program_state)
     if isinstance(op, psy_ir.Return):
       return translate_return(ctx, op, program_state)
-    if isinstance(op, hpc_gpu.GPULoop):
-      return translate_gpu_loop(ctx, op, program_state)
+    #if isinstance(op, hpc_gpu.GPULoop):
+    #  return translate_gpu_loop(ctx, op, program_state)
     if isinstance(op, hstencil.HStencil_Stencil):
       return translate_hstencil_stencil(ctx, op, program_state)
     if isinstance(op, hstencil.HStencil_Result):
@@ -458,7 +458,10 @@ def translate_stmt(ctx: SSAValueCtx, op: Operation, program_state : ProgramState
         return ops
 
 def translate_hstencil_access(ctx: SSAValueCtx, stencil_access: Operation, program_state : ProgramState) -> List[Operation]:
-  access_op=stencil.Access.build(attributes={"offset": stencil_access.stencil_ops}, operands=[ctx[stencil_access.var.var_name.data]], result_types=[f64])
+  assert isinstance(stencil_access.var.type, psy_ir.ArrayType)
+  el_type=try_translate_type(stencil_access.var.type.element_type)
+  assert el_type is not None
+  access_op=stencil.Access.build(attributes={"offset": stencil_access.stencil_ops}, operands=[ctx[stencil_access.var.var_name.data]], result_types=[el_type])
   return [access_op], access_op.results[0]
 
 def translate_hstencil_result(ctx: SSAValueCtx, stencil_result: Operation, program_state : ProgramState) -> List[Operation]:
@@ -467,7 +470,10 @@ def translate_hstencil_result(ctx: SSAValueCtx, stencil_result: Operation, progr
     stmt_ops, ssa = translate_expr(ctx, op, program_state)
     ops += stmt_ops
 
-  rt=stencil.ResultType([f64])
+  assert isinstance(stencil_result.var.type, psy_ir.ArrayType)
+  el_type=try_translate_type(stencil_result.var.type.element_type)
+  assert el_type is not None
+  rt=stencil.ResultType([el_type])
 
   store_result_op=stencil.StoreResult.create(operands=[ops[-1].results[0]], result_types=[rt])
   return_op=stencil.Return.create(operands=[store_result_op.results[0]])
@@ -478,17 +484,30 @@ def translate_hstencil_result(ctx: SSAValueCtx, stencil_result: Operation, progr
   body=Region()
   body.add_block(block)
 
-  apply_op=stencil.Apply.create(operands=[ctx[stencil_result.var.var_name.data]], regions=[body], result_types=[stencil.TempType.from_shape([256,256,256])])
+  array_sizes=get_array_sizes(stencil_result.var.type)
 
-  return [apply_op  ]
+  apply_op=stencil.Apply.create(operands=[ctx[stencil_result.var.var_name.data]], regions=[body], result_types=[stencil.TempType.from_shape(array_sizes)])
+
+  return [apply_op]
+
+def get_array_sizes(array_type):
+  shape_size=len(array_type.shape.data)
+  assert shape_size % 2 == 0
+  sizes=[]
+  for i in range(0, shape_size, 2):
+    sizes.append((array_type.shape.data[i+1].value.data-array_type.shape.data[i].value.data)+1)
+  return sizes
 
 def translate_hstencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, program_state : ProgramState) -> List[Operation]:
   ops: List[Operation] = []
   new_ctx=SSAValueCtx()
   for field in stencil_stmt.input_fields.data:
-    cast_op=stencil.Load.build(operands=[ctx[field.var_name.data]], result_types=[stencil.TempType.from_shape([256,256,256])])
-    ops.append(cast_op)
-    new_ctx[field.var_name.data]=cast_op.results[0]
+    assert isinstance(field.type, psy_ir.ArrayType)
+    array_sizes=get_array_sizes(field.type)
+    cast_op=stencil.Cast.build(operands=[ctx[field.var_name.data]], result_types=[stencil.FieldType.from_shape(array_sizes)])
+    load_op=stencil.Load.build(operands=[cast_op.results[0]], result_types=[stencil.TempType.from_shape(array_sizes)])
+    ops+=[cast_op, load_op]
+    new_ctx[field.var_name.data]=load_op.results[0]
 
   for op in stencil_stmt.body.blocks[0].ops:
     stmt_ops = translate_stmt(new_ctx, op, program_state)
