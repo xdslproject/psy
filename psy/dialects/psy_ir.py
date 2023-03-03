@@ -152,8 +152,8 @@ class Container(Operation):
             imports: List[Operation],
             routines: List[Operation],
             verify_op: bool = True) -> Container:
-      res = Container.build(attributes={"container_name": container_name, "default_visibility": default_visibility, 
-                                        "is_program": False, "public_routines": ArrayAttr.from_list(public_routines), 
+      res = Container.build(attributes={"container_name": container_name, "default_visibility": default_visibility,
+                                        "is_program": False, "public_routines": ArrayAttr.from_list(public_routines),
                                         "private_routines": ArrayAttr.from_list(private_routines)},
                                         regions=[imports, routines])
       if verify_op:
@@ -205,8 +205,10 @@ class Routine(Operation):
             verify_op: bool = True) -> Routine:
         if return_var is None:
           return_var=EmptyToken()
-        res = Routine.build(attributes={"routine_name": routine_name, "return_var": return_var, 
-                                        "args": ArrayAttr.from_list(args), "is_program": is_program},
+        if isinstance(routine_name, str):
+          routine_name=StringAttr(routine_name)
+        res = Routine.build(attributes={"routine_name": routine_name, "return_var": return_var,
+                                        "args": ArrayAttr.from_list(args), "is_program": BoolAttr(is_program)},
                                         regions=[imports, local_var_declarations, routine_body])
         if verify_op:
             # We don't verify nested operations since they might have already been verified
