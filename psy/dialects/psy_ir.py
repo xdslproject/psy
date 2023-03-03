@@ -196,7 +196,7 @@ class Routine(Operation):
 
     @staticmethod
     def get(routine_name: Union[str, StringAttr],
-            return_var,
+            return_var: Union[str, StringAttr],
             imports: List[Operation],
             args: List[Operation],
             local_var_declarations: List[Operation],
@@ -207,6 +207,7 @@ class Routine(Operation):
           return_var=EmptyToken()
         if isinstance(routine_name, str):
           routine_name=StringAttr(routine_name)
+
         res = Routine.build(attributes={"routine_name": routine_name, "return_var": return_var,
                                         "args": ArrayAttr.from_list(args), "is_program": BoolAttr(is_program)},
                                         regions=[imports, local_var_declarations, routine_body])
@@ -539,10 +540,10 @@ class CallExpr(Operation):
     @staticmethod
     def get(func: str,
             args: List[Operation],
-            type=EmptyAttr(),
-            intrinsic=False,
+            type:EmptyAttr =EmptyAttr(),
+            intrinsic: bool=False,
             verify_op: bool = True) -> CallExpr:
-        res = CallExpr.build(regions=[args], attributes={"func": func, "type": type, "intrinsic": intrinsic})
+        res = CallExpr.build(regions=[args], attributes={"func": StringAttr(func), "type": type, "intrinsic": BoolAttr(intrinsic)})
         if verify_op:
             # We don't verify nested operations since they might have already been verified
             res.verify(verify_nested_ops=False)
