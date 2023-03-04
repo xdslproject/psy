@@ -4,9 +4,10 @@ from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerTyp
 from xdsl.dialects import func, arith, cf #, gpu
 from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext, BlockArgument
 from psy.dialects import psy_ir, hstencil #, hpc_gpu
-from xdsl.dialects.experimental import stencil
+#from xdsl.dialects.experimental import stencil
 
 from util.list_ops import flatten
+import uuid
 from ftn.dialects import fir
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Dict
@@ -768,7 +769,7 @@ def try_translate_expr(
     Returns None otherwise.
     """
     if isinstance(op, psy_ir.Literal):
-      op = translate_literal(op)
+      op = translate_literal(op, program_state)
       return [op], op.results[0]
     if isinstance(op, psy_ir.ExprName):
       ssa_value = ctx[op.id.data]
@@ -935,7 +936,7 @@ def get_arith_instance(operation:str, lhs, rhs):
   if operation in binary_arith_psy_to_arith_comparison_op:
     return arith.Cmpi.from_mnemonic(lhs, rhs, binary_arith_psy_to_arith_comparison_op[operation])
 
-def translate_literal(op: psy_ir.Literal) -> Operation:
+def translate_literal(op: psy_ir.Literal, program_state : ProgramState) -> Operation:
     value = op.attributes["value"]
 
     if isinstance(value, IntegerAttr):
@@ -947,7 +948,16 @@ def translate_literal(op: psy_ir.Literal) -> Operation:
                                          result_types=[value.type])
 
     if isinstance(value, StringAttr):
-        return arith.Constant.create(attributes={"value": value},
-                                         result_types=[i32]) # Need to replace with string type!
+        string_literal=value.data.replace("\"", "")
+        typ=fir.CharType([ArrayAttr.from_list([IntAttr(1), IntAttr(len(string_literal))])])
+        string_lit_op=fir.StringLit.create(attributes={"size": IntegerAttr.from_int_and_width(len(string_literal), 64), "value": StringAttr(string_literal)}, result_types=[typ])
+        has_val_op=fir.HasValue.create(operands=[string_lit_op.results[0]])
+        str_uuid=uuid.uuid4().hex.upper()
+        glob=fir.Global.create(attributes={"linkName": StringAttr("linkonce"), "sym_name": StringAttr("_QQcl."+str_uuid), "symref": SymbolRefAttr.from_str("_QQcl."+str_uuid), "type": typ},
+          regions=[Region.from_operation_list([string_lit_op, has_val_op])])
+        program_state.appendToGlobal(glob)
+        ref_type=fir.ReferenceType([typ])
+        addr_lookup=fir.AddressOf.create(attributes={"symbol": SymbolRefAttr.from_str("_QQcl."+str_uuid)}, result_types=[ref_type])
+        return addr_lookup
 
     raise Exception(f"Could not translate `{op}' as a literal")
