@@ -1,6 +1,6 @@
 from __future__ import annotations
 from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerType, ArrayAttr, i32, i64, f32, f64, IndexType, DictionaryAttr, IntAttr,
-      Float16Type, Float32Type, Float64Type, FloatAttr, UnitAttr, DenseIntOrFPElementsAttr, VectorType, SymbolRefAttr)
+      Float16Type, Float32Type, Float64Type, FloatAttr, UnitAttr, DenseIntOrFPElementsAttr, VectorType, SymbolRefAttr, AnyFloat)
 from xdsl.dialects import func, arith, cf #, gpu
 from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext, BlockArgument
 from psy.dialects import psy_ir, hstencil #, hpc_gpu
@@ -51,6 +51,7 @@ class ProgramState:
     self.return_block=None
     self.imports={}
     self.globals=[]
+    self.global_fn_names=[]
     self.num_gpu_fns=0;
 
   def setRoutineName(self, routine_name):
@@ -107,11 +108,16 @@ class ProgramState:
   def clearImports(self):
     self.imports.clear()
 
-  def appendToGlobal(self, glob):
+  def appendToGlobal(self, glob, fn_name=None):
     self.globals.append(glob)
+    if fn_name is not None:
+      self.global_fn_names.append(fn_name)
 
   def getGlobals(self):
     return self.globals
+
+  def hasGlobalFnName(self, fn_name):
+    return fn_name in self.global_fn_names
 
 def psy_ir_to_fir(ctx: MLContext, input_module: ModuleOp):
     res_module = translate_program(input_module)
@@ -661,10 +667,6 @@ def translate_intrinsic_call_expr(ctx: SSAValueCtx,
 def translate_print_intrinsic_call_expr(ctx: SSAValueCtx,
                              call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
     arg_operands=[]
-    # Ignore first argument as it will be a star
-    for argument in call_expr.args.blocks[0].ops[1:]:
-      op, arg = translate_expr(ctx, argument, program_state)
-      arg_operands.append(op[0])
 
     # Start the IO session
     filename_str_op=generate_string_literal("./dummy.F90", program_state)
@@ -674,35 +676,78 @@ def translate_print_intrinsic_call_expr(ctx: SSAValueCtx,
 
     call1=fir.Call.create(attributes={"callee": SymbolRefAttr.from_str("_FortranAioBeginExternalListOutput")}, operands=[arg1.results[0],
       arg2.results[0], arg3.results[0]], result_types=[fir.ReferenceType([IntegerType.from_width(8)])])
-
     arg_operands.extend([filename_str_op, arg1, arg2, arg3, call1])
 
-    # Now do the actual print
-    str_len=arith.Constant.create(attributes={"value": IntegerAttr.from_index_int_value(11)}, result_types=[IndexType()])
-    arg2_2=fir.Convert.create(operands=[arg_operands[0].results[0]], result_types=[fir.ReferenceType([IntegerType.from_width(8)])])
-    arg3_2=fir.Convert.create(operands=[str_len.results[0]], result_types=[i64])
-    call2=fir.Call.create(attributes={"callee": SymbolRefAttr.from_str("_FortranAioOutputAscii")}, operands=[call1.results[0],
-      arg2_2.results[0], arg3_2.results[0]], result_types=[IntegerType.from_width(1)])
+    insertExternalFunctionToGlobalState(program_state, "_FortranAioBeginExternalListOutput", [i32, fir.ReferenceType([IntegerType.from_width(8)]),
+      i32], fir.ReferenceType([IntegerType.from_width(8)]))
 
-    arg_operands.extend([str_len, arg2_2, arg3_2, call2])
+    # Ignore first argument as it will be a star
+    for argument in call_expr.args.blocks[0].ops[1:]:
+      # For each argument need to issue a different print
+      op, arg = translate_expr(ctx, argument, program_state)
+      # Now do the actual print
+      if isinstance(arg.typ, IntegerType) or isinstance(arg.typ, AnyFloat):
+        arg_operands.extend(generatePrintForIntegerOrFloat(program_state, op[0], arg, call1.results[0]))
+
+
+      if isinstance(arg.typ, fir.ReferenceType):
+        if isinstance(arg.typ.type, fir.IntegerType) or isinstance(arg.typ.type, AnyFloat):
+          load_op=fir.Load.create(operands=[arg], result_types=[arg.typ.type])
+          print_ops=generatePrintForIntegerOrFloat(program_state, load_op, load_op.results[0], call1.results[0])
+          arg_operands.append(ops[0])
+          arg_operands.extend(print_ops)
+        if isinstance(arg.typ.type, fir.CharType):
+          # This is a reference to a string
+          arg_operands.extend(generatePrintForString(program_state, op[0], arg, call1.results[0]))
 
     # Close out the IO
     call3=fir.Call.create(attributes={"callee": SymbolRefAttr.from_str("_FortranAioEndIoStatement")}, operands=[call1.results[0]],
       result_types=[IntegerType.from_width(32)])
-
     arg_operands.extend([call3])
 
-    # The actual print function
-    program_state.appendToGlobal(func.FuncOp.external("_FortranAioOutputAscii", [fir.ReferenceType([IntegerType.from_width(8)]),
-      fir.ReferenceType([IntegerType.from_width(8)]), i64], [IntegerType.from_width(1)]))
+    insertExternalFunctionToGlobalState(program_state, "_FortranAioEndIoStatement", [fir.ReferenceType([IntegerType.from_width(8)])], i32)
 
-    # Begins external list output
-    program_state.appendToGlobal(func.FuncOp.external("_FortranAioBeginExternalListOutput", [i32, fir.ReferenceType([IntegerType.from_width(8)]),
-      i32], [fir.ReferenceType([IntegerType.from_width(8)])]))
-
-    # Marks end of IO
-    program_state.appendToGlobal(func.FuncOp.external("_FortranAioEndIoStatement", [fir.ReferenceType([IntegerType.from_width(8)])], [i32]))
     return arg_operands
+
+def generatePrintForIntegerOrFloat(program_state, op, arg, init_call_ssa):
+    if isinstance(arg.typ, IntegerType):
+      if arg.typ.width.data == 64:
+        fn_name="_FortranAioOutputInteger64"
+      elif arg.typ.width.data == 32:
+        fn_name="_FortranAioOutputInteger32"
+      else:
+        raise Exception(f"Could not translate integer width`{arg.typ.width.data}' as only 32 or 64 bit supported")
+    elif isinstance(arg.typ, AnyFloat):
+      if isinstance(arg.typ, Float32Type):
+        fn_name="_FortranAioOutputReal32"
+      elif isinstance(arg.typ, Float64Type):
+        fn_name="_FortranAioOutputReal64"
+      else:
+        raise Exception(f"Could not translate float type`{arg.typ}' as only 32 or 64 bit supported")
+    else:
+      raise Exception(f"Could not translate type`{arg.typ}' for printing")
+    print_call=fir.Call.create(attributes={"callee": SymbolRefAttr.from_str(fn_name)}, operands=[init_call_ssa,
+          arg], result_types=[IntegerType.from_width(1)])
+    insertExternalFunctionToGlobalState(program_state, fn_name, [init_call_ssa.typ, arg.typ], IntegerType.from_width(1))
+    return [op, print_call]
+
+def generatePrintForString(program_state, op, arg, init_call_ssa):
+    from_num=arg.typ.type.from_index.data
+    to_num=arg.typ.type.to_index.data
+    string_length=((to_num-from_num)+1)
+    str_len=arith.Constant.create(attributes={"value": IntegerAttr.from_index_int_value(string_length)}, result_types=[IndexType()])
+    arg2_2=fir.Convert.create(operands=[arg], result_types=[fir.ReferenceType([IntegerType.from_width(8)])])
+    arg3_2=fir.Convert.create(operands=[str_len.results[0]], result_types=[i64])
+    print_call=fir.Call.create(attributes={"callee": SymbolRefAttr.from_str("_FortranAioOutputAscii")}, operands=[init_call_ssa,
+          arg2_2.results[0], arg3_2.results[0]], result_types=[IntegerType.from_width(1)])
+    insertExternalFunctionToGlobalState(program_state, "_FortranAioOutputAscii", [init_call_ssa.typ,
+        fir.ReferenceType([IntegerType.from_width(8)]), i64], IntegerType.from_width(1))
+    return [op, str_len, arg2_2, arg3_2, print_call]
+
+def insertExternalFunctionToGlobalState(program_state, function_name, args, result_type):
+    if not program_state.hasGlobalFnName(function_name):
+      fn=func.FuncOp.external(function_name, args, [result_type])
+      program_state.appendToGlobal(fn, function_name)
 
 def translate_deallocate_intrinsic_call_expr(ctx: SSAValueCtx,
                              call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
@@ -829,6 +874,8 @@ def try_translate_expr(
         result_type=i32
       elif isinstance(ssa_value.typ.type, Float32Type):
         result_type=f32
+      elif isinstance(ssa_value.typ.type, Float64Type):
+        result_type=f64
       elif isinstance(ssa_value.typ.type, fir.ArrayType):
         # Already have created the addressof reference so just return this
         return None, ssa_value
@@ -850,7 +897,6 @@ def try_translate_expr(
     if isinstance(op, hstencil.HStencil_Access):
       return translate_hstencil_access(ctx, op, program_state)
 
-    print(type(op))
     assert False, "Unknown Expression"
 
 def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, program_state : ProgramState):
