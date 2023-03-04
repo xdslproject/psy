@@ -655,6 +655,54 @@ def translate_intrinsic_call_expr(ctx: SSAValueCtx,
       return translate_allocate_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
     if intrinsic_name == "deallocate":
       return translate_deallocate_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
+    if intrinsic_name.lower() == "print":
+      return translate_print_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
+
+def translate_print_intrinsic_call_expr(ctx: SSAValueCtx,
+                             call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
+    arg_operands=[]
+    # Ignore first argument as it will be a star
+    for argument in call_expr.args.blocks[0].ops[1:]:
+      op, arg = translate_expr(ctx, argument, program_state)
+      arg_operands.append(op[0])
+
+    # Start the IO session
+    filename_str_op=generate_string_literal("./dummy.F90", program_state)
+    arg1=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(-1, 32)}, result_types=[i32])
+    arg2=fir.Convert.create(operands=[filename_str_op.results[0]], result_types=[fir.ReferenceType([IntegerType.from_width(8)])])
+    arg3=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(3, 32)}, result_types=[i32])
+
+    call1=fir.Call.create(attributes={"callee": SymbolRefAttr.from_str("_FortranAioBeginExternalListOutput")}, operands=[arg1.results[0],
+      arg2.results[0], arg3.results[0]], result_types=[fir.ReferenceType([IntegerType.from_width(8)])])
+
+    arg_operands.extend([filename_str_op, arg1, arg2, arg3, call1])
+
+    # Now do the actual print
+    str_len=arith.Constant.create(attributes={"value": IntegerAttr.from_index_int_value(11)}, result_types=[IndexType()])
+    arg2_2=fir.Convert.create(operands=[arg_operands[0].results[0]], result_types=[fir.ReferenceType([IntegerType.from_width(8)])])
+    arg3_2=fir.Convert.create(operands=[str_len.results[0]], result_types=[i64])
+    call2=fir.Call.create(attributes={"callee": SymbolRefAttr.from_str("_FortranAioOutputAscii")}, operands=[call1.results[0],
+      arg2_2.results[0], arg3_2.results[0]], result_types=[IntegerType.from_width(1)])
+
+    arg_operands.extend([str_len, arg2_2, arg3_2, call2])
+
+    # Close out the IO
+    call3=fir.Call.create(attributes={"callee": SymbolRefAttr.from_str("_FortranAioEndIoStatement")}, operands=[call1.results[0]],
+      result_types=[IntegerType.from_width(32)])
+
+    arg_operands.extend([call3])
+
+    # The actual print function
+    program_state.appendToGlobal(func.FuncOp.external("_FortranAioOutputAscii", [fir.ReferenceType([IntegerType.from_width(8)]),
+      fir.ReferenceType([IntegerType.from_width(8)]), i64], [IntegerType.from_width(1)]))
+
+    # Begins external list output
+    program_state.appendToGlobal(func.FuncOp.external("_FortranAioBeginExternalListOutput", [i32, fir.ReferenceType([IntegerType.from_width(8)]),
+      i32], [fir.ReferenceType([IntegerType.from_width(8)])]))
+
+    # Marks end of IO
+    program_state.appendToGlobal(func.FuncOp.external("_FortranAioEndIoStatement", [fir.ReferenceType([IntegerType.from_width(8)])], [i32]))
+    return arg_operands
 
 def translate_deallocate_intrinsic_call_expr(ctx: SSAValueCtx,
                              call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
@@ -948,16 +996,19 @@ def translate_literal(op: psy_ir.Literal, program_state : ProgramState) -> Opera
                                          result_types=[value.type])
 
     if isinstance(value, StringAttr):
-        string_literal=value.data.replace("\"", "")
-        typ=fir.CharType([ArrayAttr.from_list([IntAttr(1), IntAttr(len(string_literal))])])
-        string_lit_op=fir.StringLit.create(attributes={"size": IntegerAttr.from_int_and_width(len(string_literal), 64), "value": StringAttr(string_literal)}, result_types=[typ])
-        has_val_op=fir.HasValue.create(operands=[string_lit_op.results[0]])
-        str_uuid=uuid.uuid4().hex.upper()
-        glob=fir.Global.create(attributes={"linkName": StringAttr("linkonce"), "sym_name": StringAttr("_QQcl."+str_uuid), "symref": SymbolRefAttr.from_str("_QQcl."+str_uuid), "type": typ},
-          regions=[Region.from_operation_list([string_lit_op, has_val_op])])
-        program_state.appendToGlobal(glob)
-        ref_type=fir.ReferenceType([typ])
-        addr_lookup=fir.AddressOf.create(attributes={"symbol": SymbolRefAttr.from_str("_QQcl."+str_uuid)}, result_types=[ref_type])
-        return addr_lookup
+        return generate_string_literal(value.data, program_state)
 
     raise Exception(f"Could not translate `{op}' as a literal")
+
+def generate_string_literal(string, program_state : ProgramState) -> Operation:
+    string_literal=string.replace("\"", "")
+    typ=fir.CharType([fir.IntAttr.from_int(1), fir.IntAttr.from_int(len(string_literal))])
+    string_lit_op=fir.StringLit.create(attributes={"size": IntegerAttr.from_int_and_width(len(string_literal), 64), "value": StringAttr(string_literal)}, result_types=[typ])
+    has_val_op=fir.HasValue.create(operands=[string_lit_op.results[0]])
+    str_uuid=uuid.uuid4().hex.upper()
+    glob=fir.Global.create(attributes={"linkName": StringAttr("linkonce"), "sym_name": StringAttr("_QQcl."+str_uuid), "symref": SymbolRefAttr.from_str("_QQcl."+str_uuid), "type": typ},
+      regions=[Region.from_operation_list([string_lit_op, has_val_op])])
+    program_state.appendToGlobal(glob)
+    ref_type=fir.ReferenceType([typ])
+    addr_lookup=fir.AddressOf.create(attributes={"symbol": SymbolRefAttr.from_str("_QQcl."+str_uuid)}, result_types=[ref_type])
+    return addr_lookup
