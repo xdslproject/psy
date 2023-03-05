@@ -5,7 +5,7 @@ from xdsl.dialects import func, arith, cf, mpi #, gpu
 from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext, BlockArgument
 from psy.dialects import psy_ir, hstencil #, hpc_gpu
 #from xdsl.dialects.experimental import stencil
-
+from xdsl.dialects.llvm import LLVMPointerType
 from util.list_ops import flatten
 import uuid
 from ftn.dialects import fir
@@ -677,6 +677,50 @@ def translate_intrinsic_call_expr(ctx: SSAValueCtx,
       return translate_print_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
     if intrinsic_name.lower() == "mpi_commrank":
       return translate_mpi_commrank_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
+    if intrinsic_name.lower() == "mpi_send":
+      return translate_mpi_send_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
+    if intrinsic_name.lower() == "mpi_recv":
+      return translate_mpi_recv_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
+
+def translate_mpi_send_intrinsic_call_expr(ctx: SSAValueCtx,
+                             call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
+    program_state.setRequiresMPI(True)
+    assert len(call_expr.args.blocks[0].ops) == 4
+    assert isinstance(call_expr.args.blocks[0].ops[0], psy_ir.ExprName)
+
+    ptr_type=try_translate_type(call_expr.args.blocks[0].ops[0].var.type)
+
+    convert_buffer=fir.Convert.create(operands=[ctx[call_expr.args.blocks[0].ops[0].id.data]],
+                    result_types=[fir.LLVMPointerType([ptr_type])])
+    count_op, count_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[1], program_state)
+    target_op, target_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[2], program_state)
+    tag_op, tag_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[3], program_state)
+
+    mpi_send_op=mpi.Send.get(convert_buffer.results[0], count_arg, type_to_mpi_datatype(ptr_type), target_arg, tag_arg)
+
+    return count_op + target_op + tag_op + [convert_buffer, mpi_send_op]
+
+def translate_mpi_recv_intrinsic_call_expr(ctx: SSAValueCtx,
+                             call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
+    program_state.setRequiresMPI(True)
+    assert len(call_expr.args.blocks[0].ops) == 4
+    assert isinstance(call_expr.args.blocks[0].ops[0], psy_ir.ExprName)
+
+    ptr_type=try_translate_type(call_expr.args.blocks[0].ops[0].var.type)
+
+    convert_buffer=fir.Convert.create(operands=[ctx[call_expr.args.blocks[0].ops[0].id.data]],
+                    result_types=[fir.LLVMPointerType([ptr_type])])
+    count_op, count_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[1], program_state)
+    source_op, source_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[2], program_state)
+    tag_op, tag_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[3], program_state)
+    mpi_recv_op=mpi.Recv.get(convert_buffer.results[0], count_arg, type_to_mpi_datatype(ptr_type), source_arg, tag_arg)
+
+    return count_op + source_op + tag_op + [convert_buffer, mpi_recv_op]
+
+def type_to_mpi_datatype(typ):
+  if typ==i32:
+    return mpi.MPI_INT
+  raise Exception(f"Could not translate type`{typ}' to MPI datatype as this unknown")
 
 def translate_mpi_commrank_intrinsic_call_expr(ctx: SSAValueCtx,
                              call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
