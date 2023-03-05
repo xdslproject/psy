@@ -1,7 +1,7 @@
 from __future__ import annotations
 from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerType, ArrayAttr, i32, i64, f32, f64, IndexType, DictionaryAttr, IntAttr,
       Float16Type, Float32Type, Float64Type, FloatAttr, UnitAttr, DenseIntOrFPElementsAttr, VectorType, SymbolRefAttr, AnyFloat)
-from xdsl.dialects import func, arith, cf #, gpu
+from xdsl.dialects import func, arith, cf, mpi #, gpu
 from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext, BlockArgument
 from psy.dialects import psy_ir, hstencil #, hpc_gpu
 #from xdsl.dialects.experimental import stencil
@@ -53,6 +53,13 @@ class ProgramState:
     self.globals=[]
     self.global_fn_names=[]
     self.num_gpu_fns=0;
+    self.requires_mpi=False
+
+  def setRequiresMPI(self, requires_mpi):
+    self.requires_mpi=requires_mpi
+
+  def getRequiresMPI(self):
+    return self.requires_mpi
 
   def setRoutineName(self, routine_name):
     self.routine_name=routine_name
@@ -150,7 +157,12 @@ def translate_program(input_module: ModuleOp) -> ModuleOp:
         #containers.append(translate_container(global_ctx, top_level_entry))
       elif isinstance(top_level_entry, psy_ir.Routine):
         program_state = ProgramState()
-        block.add_op(translate_fun_def(global_ctx, top_level_entry, program_state))
+        fn_ops=translate_fun_def(global_ctx, top_level_entry, program_state)
+        if program_state.getRequiresMPI():
+          fn_ops.regions[0].blocks[0].insert_op(mpi.Init.build(), 0)
+          # Need to do this to pop finalize before the return at the end of the block
+          fn_ops.regions[0].blocks[0].insert_op(mpi.Finalize.build(), len(fn_ops.regions[0].blocks[0].ops)-1)
+        block.add_op(fn_ops)
         globals_list.extend(program_state.getGlobals())
 
     if len(globals_list) > 0:
@@ -663,6 +675,14 @@ def translate_intrinsic_call_expr(ctx: SSAValueCtx,
       return translate_deallocate_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
     if intrinsic_name.lower() == "print":
       return translate_print_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
+    if intrinsic_name.lower() == "mpi_commrank":
+      return translate_mpi_commrank_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
+
+def translate_mpi_commrank_intrinsic_call_expr(ctx: SSAValueCtx,
+                             call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
+    program_state.setRequiresMPI(True)
+    mpi_call=mpi.CommRank.get()
+    return [mpi_call]
 
 def translate_print_intrinsic_call_expr(ctx: SSAValueCtx,
                              call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
