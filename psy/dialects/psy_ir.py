@@ -249,7 +249,7 @@ class ExprName(Operation):
 
     @staticmethod
     def get(name: Union[str, StringAttr], v, verify_op: bool = True) -> ExprName:
-        res = ExprName.build(attributes={"id": name, "var": v})
+        res = ExprName.build(attributes={"id": StringAttr(name), "var": v})
         if verify_op:
             # We don't verify nested operations since they might have already been verified
             res.verify(verify_nested_ops=False)
@@ -304,7 +304,8 @@ class VarDef(Operation):
             intent: str = "",
             verify_op: bool = True) -> VarDef:
         #TODO: This is a bit nasty how we feed in both string and IR nodes, with arrays will be hard to fix though?
-        res = VarDef.build(attributes={"var": var, "is_proc_argument": is_proc_argument, "is_constant": is_constant, "intent": intent})
+        res = VarDef.build(attributes={"var": var, "is_proc_argument": BoolAttr.from_bool(is_proc_argument),
+          "is_constant": BoolAttr.from_bool(is_constant), "intent": StringAttr(intent)})
         if verify_op:
             # We don't verify nested operations since they might have already been verified
             res.verify(verify_nested_ops=False)
