@@ -440,7 +440,7 @@ class BinaryOperation(Operation):
             lhs: Operation,
             rhs: Operation,
             verify_op: bool = True) -> BinaryExpr:
-        res = BinaryOperation.build(attributes={"op": op}, regions=[[lhs], [rhs]])
+        res = BinaryOperation.build(attributes={"op": StringAttr(op)}, regions=[[lhs], [rhs]])
         if verify_op:
             # We don't verify nested operations since they might have already been verified
             res.verify(verify_nested_ops=False)
