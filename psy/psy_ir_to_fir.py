@@ -677,6 +677,8 @@ def translate_intrinsic_call_expr(ctx: SSAValueCtx,
       return translate_print_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
     if intrinsic_name.lower() == "mpi_commrank":
       return translate_mpi_commrank_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
+    if intrinsic_name.lower() == "mpi_commsize":
+      return translate_mpi_commsize_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
     if intrinsic_name.lower() == "mpi_send":
       return translate_mpi_send_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
     if intrinsic_name.lower() == "mpi_recv":
@@ -695,10 +697,10 @@ def translate_mpi_send_intrinsic_call_expr(ctx: SSAValueCtx,
     count_op, count_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[1], program_state)
     target_op, target_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[2], program_state)
     tag_op, tag_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[3], program_state)
+    get_mpi_dtype_op=mpi.GetDtypeOp.get(ptr_type)
+    mpi_send_op=mpi.Send.get(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], target_arg, tag_arg)
 
-    mpi_send_op=mpi.Send.get(convert_buffer.results[0], count_arg, type_to_mpi_datatype(ptr_type), target_arg, tag_arg)
-
-    return count_op + target_op + tag_op + [convert_buffer, mpi_send_op]
+    return count_op + target_op + tag_op + [convert_buffer, get_mpi_dtype_op, mpi_send_op]
 
 def translate_mpi_recv_intrinsic_call_expr(ctx: SSAValueCtx,
                              call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
@@ -713,9 +715,10 @@ def translate_mpi_recv_intrinsic_call_expr(ctx: SSAValueCtx,
     count_op, count_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[1], program_state)
     source_op, source_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[2], program_state)
     tag_op, tag_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[3], program_state)
-    mpi_recv_op=mpi.Recv.get(convert_buffer.results[0], count_arg, type_to_mpi_datatype(ptr_type), source_arg, tag_arg)
+    get_mpi_dtype_op=mpi.GetDtypeOp.get(ptr_type)
+    mpi_recv_op=mpi.Recv.get(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], source_arg, tag_arg)
 
-    return count_op + source_op + tag_op + [convert_buffer, mpi_recv_op]
+    return count_op + source_op + tag_op + [convert_buffer, get_mpi_dtype_op, mpi_recv_op]
 
 def type_to_mpi_datatype(typ):
   if typ==i32:
@@ -726,6 +729,12 @@ def translate_mpi_commrank_intrinsic_call_expr(ctx: SSAValueCtx,
                              call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
     program_state.setRequiresMPI(True)
     mpi_call=mpi.CommRank.get()
+    return [mpi_call]
+
+def translate_mpi_commsize_intrinsic_call_expr(ctx: SSAValueCtx,
+                             call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
+    program_state.setRequiresMPI(True)
+    mpi_call=mpi.CommSize.get()
     return [mpi_call]
 
 def translate_print_intrinsic_call_expr(ctx: SSAValueCtx,
