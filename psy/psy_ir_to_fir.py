@@ -224,7 +224,14 @@ def translate_fun_def(ctx: SSAValueCtx,
     arg_types=[]
     arg_names=[]
     for arg in routine_def.args.data:
-      arg_type=fir.ReferenceType([try_translate_type(arg.type)])
+      translated_type=try_translate_type(arg.type)
+      if isinstance(translated_type, fir.ArrayType) and translated_type.hasDeferredShape():
+        # If this is an array with a deferred type then wrap it in a box as this will
+        # contain parameter size information that is passed by the caller
+        arg_type=fir.BoxType([translated_type])
+      else:
+        # Otherwise it's just a memory reference, nice and easy
+        arg_type=fir.ReferenceType([translated_type])
       arg_names.append(arg.var_name.data)
       arg_types.append(arg_type)
 
@@ -433,7 +440,7 @@ def try_translate_type(op: Operation) -> Optional[Attribute]:
       array_size=[]
       i=0
       while i<len(array_shape):
-        if isinstance(array_shape[i], psy_ir.DeferredAttr):
+        if isinstance(array_shape[i], psy_ir.DeferredAttr) or isinstance(array_shape[i], psy_ir.AssumedSizeAttr):
           array_size.append(fir.DeferredAttr())
         else:
           if isinstance(array_shape[i+1], int) and isinstance(array_shape[i], int):
@@ -934,7 +941,6 @@ def translate_user_call_expr(ctx: SSAValueCtx,
         if not isinstance(type_to_reference, fir.ReferenceType) and not isinstance(type_to_reference, fir.ArrayType):
           if isinstance(type_to_reference, fir.HeapType):
             type_to_reference=type_to_reference.type
-            print(user_defined_functions[name.data])
             convert_op=fir.Convert.create(operands=[arg], result_types=[fn_info.args[index]])
             ops+=[convert_op]
             args.append(convert_op.results[0])
@@ -945,7 +951,19 @@ def translate_user_call_expr(ctx: SSAValueCtx,
             ops+=[reference_creation, store_op]
             args.append(reference_creation.results[0])
         else:
-          args.append(arg)
+          if isinstance(fn_info.args[index], fir.BoxType) and isinstance(type_to_reference, fir.ReferenceType):
+            # We have a local array that is a reference array, but the calling function accepts a box as it
+            # uses assumed sizes for the size of the array
+            array_type=get_nested_type(type_to_reference, fir.ArrayType)
+            val=array_type.shape.data[0].value.data
+            constant_op=arith.Constant.create(attributes={"value": IntegerAttr.from_index_int_value(val)}, result_types=[IndexType()])
+            shape_op=fir.Shape.create(operands=[constant_op.results[0]], result_types=[fir.ShapeType([IntAttr.from_int(1)])])
+            embox_op=fir.Embox.build(operands=[arg, shape_op.results[0], [], []], regions=[[]], result_types=[fir.BoxType([array_type])])
+            convert_op=fir.Convert.create(operands=[embox_op.results[0]], result_types=[fn_info.args[index]])
+            ops+=[constant_op, shape_op, embox_op, convert_op]
+            args.append(convert_op.results[0])
+          else:
+            args.append(arg)
 
     #assert program_state.hasImport(name.data)
     #full_name=generateProcedurePrefixWithModuleName(program_state.getImportModule(name.data), name.data, "P")
@@ -1032,7 +1050,9 @@ def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, 
 
   boxdims_subtractor=None
 
-  if (has_nested_type(ctx[op.var.var_name.data].typ, fir.BoxType)):
+  base_type=None
+
+  if (has_nested_type(ctx[op.var.var_name.data].typ, fir.BoxType) and has_nested_type(ctx[op.var.var_name.data].typ, fir.HeapType)):
     # We need to debox this
     box_type=get_nested_type(ctx[op.var.var_name.data].typ, fir.BoxType)
     heap_type=get_nested_type(ctx[op.var.var_name.data].typ, fir.HeapType)
@@ -1044,11 +1064,13 @@ def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, 
 
     expressions+=[load_op, zero_op, boxdims_op, boxaddr_op]
     ssa_list.append(boxaddr_op.results[0])
+    base_type=boxaddr_op.results[0].typ
     # Below is needed for subtraction from each argument
     boxdims_subtractor=boxdims_op.results[0]
   else:
     # This is a reference to an array, nice and easy just use it directly
     ssa_list.append(ctx[op.var.var_name.data])
+    base_type=ctx[op.var.var_name.data].typ
 
   for accessor in op.accessors.blocks[0].ops:
     # A lot of this is doing the subtraction to zero-base each index (default is starting at 1 in Fortran)
@@ -1084,7 +1106,7 @@ def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, 
 
   fir_type=try_translate_type(op.var.type)
 
-  coordinate_of=fir.CoordinateOf.create(attributes={"baseType": fir.ReferenceType([fir_type])}, operands=ssa_list, result_types=[fir.ReferenceType([fir_type.type])])
+  coordinate_of=fir.CoordinateOf.create(attributes={"baseType": base_type}, operands=ssa_list, result_types=[fir.ReferenceType([fir_type.type])])
   expressions.append(coordinate_of)
   return expressions, coordinate_of.results[0]
 
