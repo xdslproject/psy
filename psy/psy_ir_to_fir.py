@@ -701,7 +701,8 @@ def translate_mpi_send_intrinsic_call_expr(ctx: SSAValueCtx,
     # Pointer type needs to be base type which might be wrapped in an array
     if isinstance(ptr_type, fir.ArrayType): ptr_type=ptr_type.type
 
-    convert_buffer=fir.Convert.create(operands=[ctx[call_expr.args.blocks[0].ops[0].id.data]],
+    buffer_op, buffer_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[0], program_state)
+    convert_buffer=fir.Convert.create(operands=[buffer_arg],
                     result_types=[fir.LLVMPointerType([ptr_type])])
     count_op, count_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[1], program_state)
     target_op, target_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[2], program_state)
@@ -709,7 +710,7 @@ def translate_mpi_send_intrinsic_call_expr(ctx: SSAValueCtx,
     get_mpi_dtype_op=mpi.GetDtypeOp.get(ptr_type)
     mpi_send_op=mpi.Send.get(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], target_arg, tag_arg)
 
-    return count_op + target_op + tag_op + [convert_buffer, get_mpi_dtype_op, mpi_send_op]
+    return buffer_op + count_op + target_op + tag_op + [convert_buffer, get_mpi_dtype_op, mpi_send_op]
 
 def translate_mpi_recv_intrinsic_call_expr(ctx: SSAValueCtx,
                              call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
@@ -721,7 +722,8 @@ def translate_mpi_recv_intrinsic_call_expr(ctx: SSAValueCtx,
     # Pointer type needs to be base type which might be wrapped in an array
     if isinstance(ptr_type, fir.ArrayType): ptr_type=ptr_type.type
 
-    convert_buffer=fir.Convert.create(operands=[ctx[call_expr.args.blocks[0].ops[0].id.data]],
+    buffer_op, buffer_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[0], program_state)
+    convert_buffer=fir.Convert.create(operands=[buffer_arg],
                     result_types=[fir.LLVMPointerType([ptr_type])])
     count_op, count_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[1], program_state)
     source_op, source_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[2], program_state)
@@ -729,7 +731,7 @@ def translate_mpi_recv_intrinsic_call_expr(ctx: SSAValueCtx,
     get_mpi_dtype_op=mpi.GetDtypeOp.get(ptr_type)
     mpi_recv_op=mpi.Recv.get(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], source_arg, tag_arg)
 
-    return count_op + source_op + tag_op + [convert_buffer, get_mpi_dtype_op, mpi_recv_op]
+    return buffer_op + count_op + source_op + tag_op + [convert_buffer, get_mpi_dtype_op, mpi_recv_op]
 
 def type_to_mpi_datatype(typ):
   if typ==i32:
@@ -840,7 +842,10 @@ def translate_deallocate_intrinsic_call_expr(ctx: SSAValueCtx,
       raise Exception(f"For deallocate expected 1 argument but {len(call_expr.args.blocks[0].ops)} are present")
 
     op, arg = translate_expr(ctx, call_expr.args.blocks[0].ops[0], program_state)
-    target_ssa=arg
+    # The translate expression unboxes this for us, so we need to look into the operation that does that
+    # which is a load, and then grab the origional SSA reference from that argument
+    # We use the load initially here to load in the box and unbox it
+    target_ssa=op[0].operands[0]
 
     box_type=get_nested_type(target_ssa.typ, fir.BoxType)
     heap_type=get_nested_type(target_ssa.typ, fir.HeapType)
@@ -849,7 +854,9 @@ def translate_deallocate_intrinsic_call_expr(ctx: SSAValueCtx,
 
     load_op=fir.Load.create(operands=[target_ssa], result_types=[box_type])
     box_addr_op=fir.BoxAddr.create(operands=[load_op.results[0]], result_types=[heap_type])
-    freemem_op=fir.Freemem.create(operands=[box_addr_op.results[0]])
+
+
+    freemem_op=fir.Freemem.create(operands=[arg])
     zero_bits_op=fir.ZeroBits.create(result_types=[heap_type])
     zero_val_op=arith.Constant.create(attributes={"value": IntegerAttr.from_index_int_value(0)},
                                          result_types=[IndexType()])
@@ -860,7 +867,7 @@ def translate_deallocate_intrinsic_call_expr(ctx: SSAValueCtx,
     embox_op=fir.Embox.build(operands=[zero_bits_op.results[0], shape_op.results[0], [], []], regions=[[]], result_types=[box_type])
     store_op=fir.Store.create(operands=[embox_op.results[0], target_ssa])
 
-    return [load_op, box_addr_op, freemem_op, zero_bits_op, zero_val_op, shape_op, embox_op, store_op]
+    return op+[freemem_op, zero_bits_op, zero_val_op, shape_op, embox_op, store_op]
 
 
 def translate_allocate_intrinsic_call_expr(ctx: SSAValueCtx,
@@ -873,7 +880,9 @@ def translate_allocate_intrinsic_call_expr(ctx: SSAValueCtx,
       if index==0:
         target_var=op
         var_name="_QFE"+arg.var.var_name.data
-        target_ssa=ssa_arg
+        # The translate expression already unboxes this for us, so we need to look into the operation that does that
+        # which is a load and we don't care about here, and then grab the origional SSA reference from that argument
+        target_ssa=op[0].operands[0]
       else:
         if op is not None: ops += op
         convert_op=fir.Convert.create(operands=[ssa_arg], result_types=[IndexType()])
@@ -881,11 +890,10 @@ def translate_allocate_intrinsic_call_expr(ctx: SSAValueCtx,
         args.append(convert_op.results[0])
     heap_type=get_nested_type(target_ssa.typ, fir.HeapType)
     array_type=get_nested_type(target_ssa.typ, fir.ArrayType)
-    box_type=get_nested_type(target_ssa.typ, fir.BoxType)
 
     allocmem_op=fir.Allocmem.build(attributes={"in_type":array_type, "uniq_name": StringAttr(var_name+".alloc")}, operands=[[], args], regions=[[]], result_types=[heap_type])
     shape_op=fir.Shape.create(operands=args, result_types=[fir.ShapeType([IntAttr.from_int(len(args))])])
-    embox_op=fir.Embox.build(operands=[allocmem_op.results[0], shape_op.results[0], [], []], regions=[[]], result_types=[box_type])
+    embox_op=fir.Embox.build(operands=[allocmem_op.results[0], shape_op.results[0], [], []], regions=[[]], result_types=[fir.BoxType([heap_type])])
     store_op=fir.Store.create(operands=[embox_op.results[0], target_ssa])
     ops+=[allocmem_op, shape_op, embox_op, store_op]
     return ops
@@ -970,11 +978,16 @@ def try_translate_expr(
         # Already have created the addressof reference so just return this
         return None, ssa_value
       elif isinstance(ssa_value.typ.type, fir.BoxType):
-        return None, ssa_value
+        # If it is a box type then unbox it
+        load_op=fir.Load.create(operands=[ssa_value], result_types=[ssa_value.typ.type])
+        boxaddr_op=fir.BoxAddr.create(operands=[load_op.results[0]], result_types=[ssa_value.typ.type.type])
+        return [load_op, boxaddr_op], boxaddr_op.results[0]
 
+      # This is a bit wierd, we have looked into the types of the reference and handled
+      # these above, now issue the load (if indeed we want to do this)
       op=fir.Load.create(operands=[ssa_value], result_types=[result_type])
-
       return [op], op.results[0]
+
     if isinstance(op, psy_ir.BinaryOperation):
       return translate_binary_expr(ctx, op, program_state)
     if isinstance(op, psy_ir.UnaryOperation):
