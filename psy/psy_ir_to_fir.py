@@ -379,16 +379,18 @@ def define_array_var(ctx: SSAValueCtx,
       embox=fir.Embox.create(operands=[zero_bits.results[0], shape.results[0]], result_types=[type])
       has_val=fir.HasValue.create(operands=[embox.results[0]])
       region_args=[zero_bits, zero_val, shape, embox, has_val]
-    else:
-      undef=fir.Undefined.create(result_types=[type])
-      hasval=fir.HasValue.create(operands=[undef.results[0]])
-      region_args=[undef, hasval]
-    glob=fir.Global.create(attributes={"linkName": StringAttr("internal"), "sym_name": StringAttr("_QFE"+var_name.data), "symref": SymbolRefAttr.from_str("_QFE"+var_name.data), "type": type},
+
+      glob=fir.Global.create(attributes={"linkName": StringAttr("internal"), "sym_name": StringAttr("_QFE"+var_name.data), "symref": SymbolRefAttr.from_str("_QFE"+var_name.data), "type": type},
           regions=[Region.from_operation_list(region_args)])
-    addr_lookup=fir.AddressOf.create(attributes={"symbol": SymbolRefAttr.from_str("_QFE"+var_name.data)}, result_types=[fir.ReferenceType([type])])
-    program_state.appendToGlobal(glob)
-    ctx[var_name.data] = addr_lookup.results[0]
-    return [addr_lookup]
+      addr_lookup=fir.AddressOf.create(attributes={"symbol": SymbolRefAttr.from_str("_QFE"+var_name.data)}, result_types=[fir.ReferenceType([type])])
+      program_state.appendToGlobal(glob)
+      ctx[var_name.data] = addr_lookup.results[0]
+      return [addr_lookup]
+    else:
+      fir_var_def = fir.Alloca.create(attributes={"bindc_name": var_name, "uniq_name": StringAttr(generateVariableUniqueName(program_state, var_name.data)),
+        "in_type":type}, operands=[], result_types=[fir.ReferenceType([type])])
+      ctx[var_name.data] = fir_var_def.results[0]
+      return [fir_var_def]
 
 def count_array_type_contains_deferred(type):
   occurances=0
