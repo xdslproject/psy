@@ -352,8 +352,8 @@ def define_scalar_var(ctx: SSAValueCtx,
     ref_type=fir.ReferenceType([type])
 
     # Operand segment sizes is wrong here, either hack it like trying (but doesn't match!) or understand why missing
-    fir_var_def = fir.Alloca.create(attributes={"bindc_name": var_name, "uniq_name": StringAttr(generateVariableUniqueName(program_state, var_name.data)),
-      "in_type":type}, operands=[], result_types=[ref_type])
+    fir_var_def = fir.Alloca.build(attributes={"bindc_name": var_name, "uniq_name": StringAttr(generateVariableUniqueName(program_state, var_name.data)),
+      "in_type":type}, operands=[[],[]], regions=[[]], result_types=[ref_type])
 
     # relate variable identifier and SSA value by adding it into the current context
     ctx[var_name.data] = fir_var_def.results[0]
@@ -387,8 +387,8 @@ def define_array_var(ctx: SSAValueCtx,
       ctx[var_name.data] = addr_lookup.results[0]
       return [addr_lookup]
     else:
-      fir_var_def = fir.Alloca.create(attributes={"bindc_name": var_name, "uniq_name": StringAttr(generateVariableUniqueName(program_state, var_name.data)),
-        "in_type":type}, operands=[], result_types=[fir.ReferenceType([type])])
+      fir_var_def = fir.Alloca.build(attributes={"bindc_name": var_name, "uniq_name": StringAttr(generateVariableUniqueName(program_state, var_name.data)),
+        "in_type":type}, operands=[[],[]], regions=[[]], result_types=[fir.ReferenceType([type])])
       ctx[var_name.data] = fir_var_def.results[0]
       return [fir_var_def]
 
@@ -902,7 +902,7 @@ def translate_user_call_expr(ctx: SSAValueCtx,
         op, arg = translate_expr(ctx, arg, program_state)
         if op is not None: ops += op
         if not isinstance(arg.typ, fir.ReferenceType) and not isinstance(arg.typ, fir.ArrayType):
-          reference_creation=fir.Alloca.create(attributes={"in_type":arg.typ, "valuebyref": UnitAttr()}, operands=[], result_types=[fir.ReferenceType([arg.typ])])
+          reference_creation=fir.Alloca.build(attributes={"in_type":arg.typ, "valuebyref": UnitAttr()}, operands=[[],[]], regions=[], result_types=[fir.ReferenceType([arg.typ])])
           store_op=fir.Store.create(operands=[arg, reference_creation.results[0]])
           ops+=[reference_creation, store_op]
           args.append(reference_creation.results[0])
