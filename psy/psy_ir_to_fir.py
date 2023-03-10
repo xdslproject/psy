@@ -698,6 +698,8 @@ def translate_mpi_send_intrinsic_call_expr(ctx: SSAValueCtx,
     assert isinstance(call_expr.args.blocks[0].ops[0], psy_ir.ExprName)
 
     ptr_type=try_translate_type(call_expr.args.blocks[0].ops[0].var.type)
+    # Pointer type needs to be base type which might be wrapped in an array
+    if isinstance(ptr_type, fir.ArrayType): ptr_type=ptr_type.type
 
     convert_buffer=fir.Convert.create(operands=[ctx[call_expr.args.blocks[0].ops[0].id.data]],
                     result_types=[fir.LLVMPointerType([ptr_type])])
@@ -716,6 +718,8 @@ def translate_mpi_recv_intrinsic_call_expr(ctx: SSAValueCtx,
     assert isinstance(call_expr.args.blocks[0].ops[0], psy_ir.ExprName)
 
     ptr_type=try_translate_type(call_expr.args.blocks[0].ops[0].var.type)
+    # Pointer type needs to be base type which might be wrapped in an array
+    if isinstance(ptr_type, fir.ArrayType): ptr_type=ptr_type.type
 
     convert_buffer=fir.Convert.create(operands=[ctx[call_expr.args.blocks[0].ops[0].id.data]],
                     result_types=[fir.LLVMPointerType([ptr_type])])
