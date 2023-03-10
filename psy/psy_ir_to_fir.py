@@ -44,6 +44,13 @@ class SSAValueCtx:
         else:
             self.dictionary[identifier] = ssa_value
 
+class UserDefinedFunction:
+  def __init__(self, full_name, args):
+    self.full_name=full_name
+    self.args=args
+
+user_defined_functions={}
+
 class ProgramState:
   def __init__(self):
     self.module_name=None
@@ -239,6 +246,9 @@ def translate_fun_def(ctx: SSAValueCtx,
       for fn in import_statement.specific_procedures.data:
         program_state.addImport(module_name, fn.data)
 
+    # Add this function to program state imports
+    program_state.addImport(program_state.getModuleName(), routine_name.data)
+
     to_add=[]
     program_state.setRoutineName(routine_name.data)
     for op in routine_def.local_var_declarations.blocks[0].ops:
@@ -280,6 +290,8 @@ def translate_fun_def(ctx: SSAValueCtx,
       full_name="_QQmain"
     else:
       full_name=generateProcedureSymName(program_state, routine_name.data)
+
+    user_defined_functions[routine_name.data]=UserDefinedFunction(full_name, arg_types)
 
     function_fir=func.FuncOp.from_region(full_name, arg_types, [try_translate_type(routine_def.return_var.type)] if is_function else [], body)
     #TODO - need to correlate against public routines to mark private or public!
@@ -912,26 +924,38 @@ def translate_user_call_expr(ctx: SSAValueCtx,
     ops: List[Operation] = []
     args: List[SSAValue] = []
 
-    for arg in call_expr.args.blocks[0].ops:
+    name=call_expr.attributes["func"]
+    fn_info=user_defined_functions[name.data]
+
+    for index, arg in enumerate(call_expr.args.blocks[0].ops):
         op, arg = translate_expr(ctx, arg, program_state)
         if op is not None: ops += op
-        if not isinstance(arg.typ, fir.ReferenceType) and not isinstance(arg.typ, fir.ArrayType):
-          reference_creation=fir.Alloca.build(attributes={"in_type":arg.typ, "valuebyref": UnitAttr()}, operands=[[],[]], regions=[], result_types=[fir.ReferenceType([arg.typ])])
-          store_op=fir.Store.create(operands=[arg, reference_creation.results[0]])
-          ops+=[reference_creation, store_op]
-          args.append(reference_creation.results[0])
+        type_to_reference=arg.typ
+        if not isinstance(type_to_reference, fir.ReferenceType) and not isinstance(type_to_reference, fir.ArrayType):
+          if isinstance(type_to_reference, fir.HeapType):
+            type_to_reference=type_to_reference.type
+            print(user_defined_functions[name.data])
+            convert_op=fir.Convert.create(operands=[arg], result_types=[fn_info.args[index]])
+            ops+=[convert_op]
+            args.append(convert_op.results[0])
+          else:
+            reference_creation=fir.Alloca.build(attributes={"in_type":arg.typ, "valuebyref": UnitAttr()}, operands=[[],[]],
+                              regions=[[]], result_types=[fir.ReferenceType([type_to_reference])])
+            store_op=fir.Store.create(operands=[arg, reference_creation.results[0]])
+            ops+=[reference_creation, store_op]
+            args.append(reference_creation.results[0])
         else:
           args.append(arg)
 
-    name=call_expr.attributes["func"]
-    assert program_state.hasImport(name.data)
-    full_name=generateProcedurePrefixWithModuleName(program_state.getImportModule(name.data), name.data, "P")
+    #assert program_state.hasImport(name.data)
+    #full_name=generateProcedurePrefixWithModuleName(program_state.getImportModule(name.data), name.data, "P")
+
     # Need return type here for expression
     if is_expr:
       result_type=try_translate_type(call_expr.type)
-      call = fir.Call.create(attributes={"callee": SymbolRefAttr.from_str(full_name)}, operands=args, result_types=[result_type])
+      call = fir.Call.create(attributes={"callee": SymbolRefAttr.from_str(fn_info.full_name)}, operands=args, result_types=[result_type])
     else:
-      call = fir.Call.create(attributes={"callee": SymbolRefAttr.from_str(full_name)}, operands=args, result_types=[])
+      call = fir.Call.create(attributes={"callee": SymbolRefAttr.from_str(fn_info.full_name)}, operands=args, result_types=[])
     ops.append(call)
     return ops
 
