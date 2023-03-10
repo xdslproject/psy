@@ -654,7 +654,12 @@ def translate_assign(ctx: SSAValueCtx,
       translated_target = ctx[assign.lhs.op.id.data]
     target_conversion_type=get_store_conversion_if_needed(translated_target.typ, value_var.typ)
     if target_conversion_type is not None:
-      converter=fir.Convert.create(operands=[value_var], result_types=[target_conversion_type])
+      if isinstance(value_var.typ, fir.ReferenceType):
+        # This is a reference, therefore load it
+        converter=fir.Load.create(operands=[value_var], result_types=[target_conversion_type])
+      else:
+        # Otherwise data type conversion
+        converter=fir.Convert.create(operands=[value_var], result_types=[target_conversion_type])
       value_fir.append(converter)
       return value_fir + lhs_fir + [fir.Store.create(operands=[converter.results[0], translated_target])]
     else:
