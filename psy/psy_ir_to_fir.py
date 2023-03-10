@@ -376,7 +376,7 @@ def define_array_var(ctx: SSAValueCtx,
       for i in range(num_deferred):
         shape_ops.append(zero_val.results[0])
       shape=fir.Shape.create(operands=shape_ops, result_types=[fir.ShapeType([IntAttr.from_int(num_deferred)])])
-      embox=fir.Embox.create(operands=[zero_bits.results[0], shape.results[0]], result_types=[type])
+      embox=fir.Embox.build(operands=[zero_bits.results[0], shape.results[0], [], []], regions=[[]], result_types=[type])
       has_val=fir.HasValue.create(operands=[embox.results[0]])
       region_args=[zero_bits, zero_val, shape, embox, has_val]
 
@@ -857,7 +857,7 @@ def translate_deallocate_intrinsic_call_expr(ctx: SSAValueCtx,
     for i in range(num_deferred):
       shape_operands.append(zero_val_op.results[0])
     shape_op=fir.Shape.create(operands=shape_operands, result_types=[fir.ShapeType([IntAttr.from_int(num_deferred)])])
-    embox_op=fir.Embox.create(operands=[zero_bits_op.results[0], shape_op.results[0]], result_types=[box_type])
+    embox_op=fir.Embox.build(operands=[zero_bits_op.results[0], shape_op.results[0], [], []], regions=[[]], result_types=[box_type])
     store_op=fir.Store.create(operands=[embox_op.results[0], target_ssa])
 
     return [load_op, box_addr_op, freemem_op, zero_bits_op, zero_val_op, shape_op, embox_op, store_op]
@@ -885,7 +885,7 @@ def translate_allocate_intrinsic_call_expr(ctx: SSAValueCtx,
 
     allocmem_op=fir.Allocmem.build(attributes={"in_type":array_type, "uniq_name": StringAttr(var_name+".alloc")}, operands=[[], args], regions=[[]], result_types=[heap_type])
     shape_op=fir.Shape.create(operands=args, result_types=[fir.ShapeType([IntAttr.from_int(len(args))])])
-    embox_op=fir.Embox.create(operands=[allocmem_op.results[0], shape_op.results[0]], result_types=[box_type])
+    embox_op=fir.Embox.build(operands=[allocmem_op.results[0], shape_op.results[0], [], []], regions=[[]], result_types=[box_type])
     store_op=fir.Store.create(operands=[embox_op.results[0], target_ssa])
     ops+=[allocmem_op, shape_op, embox_op, store_op]
     return ops
