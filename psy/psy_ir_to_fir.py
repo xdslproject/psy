@@ -894,6 +894,11 @@ def get_nested_type(in_type, search_type):
   if isinstance(in_type, search_type): return in_type
   return get_nested_type(in_type.type, search_type)
 
+def has_nested_type(in_type, search_type):
+  if isinstance(in_type, search_type): return True
+  if getattr(in_type, "type", None) is None: return False
+  return has_nested_type(in_type.type, search_type)
+
 def translate_user_call_expr(ctx: SSAValueCtx,
                              call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
     ops: List[Operation] = []
@@ -986,14 +991,38 @@ def try_translate_expr(
 
 def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, program_state : ProgramState):
   expressions=[]
-  ssa_list=[ctx[op.var.var_name.data]]
+  ssa_list=[]
+
+  boxdims_subtractor=None
+
+  if (has_nested_type(ctx[op.var.var_name.data].typ, fir.BoxType)):
+    # We need to debox this
+    box_type=get_nested_type(ctx[op.var.var_name.data].typ, fir.BoxType)
+    heap_type=get_nested_type(ctx[op.var.var_name.data].typ, fir.HeapType)
+
+    load_op=fir.Load.create(operands=[ctx[op.var.var_name.data]], result_types=[box_type])
+    zero_op=arith.Constant.create(attributes={"value": IntegerAttr.from_index_int_value(0)}, result_types=[IndexType()])
+    boxdims_op=fir.BoxDims.create(operands=[load_op.results[0], zero_op.results[0]], result_types=[IndexType(), IndexType(), IndexType()])
+    boxaddr_op=fir.BoxAddr.create(operands=[load_op.results[0]], result_types=[heap_type])
+
+    expressions+=[load_op, zero_op, boxdims_op, boxaddr_op]
+    ssa_list.append(boxaddr_op.results[0])
+    # Below is needed for subtraction from each argument
+    boxdims_subtractor=boxdims_op.results[0]
+  else:
+    # This is a reference to an array, nice and easy just use it directly
+    ssa_list.append(ctx[op.var.var_name.data])
+
   for accessor in op.accessors.blocks[0].ops:
     # A lot of this is doing the subtraction to zero-base each index (default is starting at 1 in Fortran)
     # TODO - currently we assume always starts at 1 but in Fortran can set this so will need to keep track of that in the declaration and apply here
     expr, ssa=try_translate_expr(ctx, accessor, program_state)
     expressions.extend(expr)
-    subtraction_index=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(1, 64)},
+    if boxdims_subtractor is None:
+      subtraction_index=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(1, 64)},
                                          result_types=[i64])
+    else:
+      subtraction_index=fir.Convert.create(operands=[boxdims_subtractor], result_types=[i64])
     expressions.append(subtraction_index)
 
     lhs_conv_type, rhs_conv_type=get_expression_conversion_type(ssa.typ, subtraction_index.results[0].typ)
