@@ -869,20 +869,21 @@ def translate_allocate_intrinsic_call_expr(ctx: SSAValueCtx,
     args: List[SSAValue] = []
 
     for index, arg in enumerate(call_expr.args.blocks[0].ops):
-      op, arg = translate_expr(ctx, arg, program_state)
+      op, ssa_arg = translate_expr(ctx, arg, program_state)
       if index==0:
         target_var=op
-        target_ssa=arg
+        var_name="_QFE"+arg.var.var_name.data
+        target_ssa=ssa_arg
       else:
         if op is not None: ops += op
-        convert_op=fir.Convert.create(operands=[arg], result_types=[IndexType()])
+        convert_op=fir.Convert.create(operands=[ssa_arg], result_types=[IndexType()])
         ops.append(convert_op)
         args.append(convert_op.results[0])
     heap_type=get_nested_type(target_ssa.typ, fir.HeapType)
     array_type=get_nested_type(target_ssa.typ, fir.ArrayType)
     box_type=get_nested_type(target_ssa.typ, fir.BoxType)
 
-    allocmem_op=fir.Allocmem.create(attributes={"in_type":array_type}, operands=args, result_types=[heap_type])
+    allocmem_op=fir.Allocmem.build(attributes={"in_type":array_type, "uniq_name": StringAttr(var_name+".alloc")}, operands=[[], args], regions=[[]], result_types=[heap_type])
     shape_op=fir.Shape.create(operands=args, result_types=[fir.ShapeType([IntAttr.from_int(len(args))])])
     embox_op=fir.Embox.create(operands=[allocmem_op.results[0], shape_op.results[0]], result_types=[box_type])
     store_op=fir.Store.create(operands=[embox_op.results[0], target_ssa])
