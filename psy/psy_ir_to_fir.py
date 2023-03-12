@@ -1127,7 +1127,7 @@ def translate_unary_expr(ctx: SSAValueCtx,
     return expr + [constant_true, xori], xori.results[0]
 
   if (attr.data == "SQRT"):
-    sqrt_op=math.SqrtOp.create(operands=[expr_ssa_value], result_types=[expr_ssa_value.typ])
+    sqrt_op=math.SqrtOp.get(expr_ssa_value)
     return expr + [sqrt_op], sqrt_op.results[0]
 
 def get_expression_conversion_type(lhs_type, rhs_type):
