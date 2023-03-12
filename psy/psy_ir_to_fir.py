@@ -309,8 +309,8 @@ def translate_fun_def(ctx: SSAValueCtx,
     if len(arg_names) > 0:
       arg_attrs={}
       for arg_name in arg_names:
-        arg_attrs[StringAttr("fir.bindc_name")]=StringAttr(arg_name)
-      function_fir.attributes["arg_attrs"]=DictionaryAttr.from_dict(arg_attrs)
+        arg_attrs["fir.bindc_name"]=StringAttr(arg_name)
+      function_fir.attributes["arg_attrs"]=DictionaryAttr(arg_attrs)
     return function_fir
 
 def generateProcedureSymName(program_state : ProgramState, routine_name:str):
@@ -395,14 +395,14 @@ def define_array_var(ctx: SSAValueCtx,
       shape_ops=[]
       for i in range(num_deferred):
         shape_ops.append(zero_val.results[0])
-      shape=fir.Shape.create(operands=shape_ops, result_types=[fir.ShapeType([IntAttr.from_int(num_deferred)])])
+      shape=fir.Shape.create(operands=shape_ops, result_types=[fir.ShapeType([IntAttr(num_deferred)])])
       embox=fir.Embox.build(operands=[zero_bits.results[0], shape.results[0], [], []], regions=[[]], result_types=[type])
       has_val=fir.HasValue.create(operands=[embox.results[0]])
       region_args=[zero_bits, zero_val, shape, embox, has_val]
 
-      glob=fir.Global.create(attributes={"linkName": StringAttr("internal"), "sym_name": StringAttr("_QFE"+var_name.data), "symref": SymbolRefAttr.from_str("_QFE"+var_name.data), "type": type},
+      glob=fir.Global.create(attributes={"linkName": StringAttr("internal"), "sym_name": StringAttr("_QFE"+var_name.data), "symref": SymbolRefAttr("_QFE"+var_name.data), "type": type},
           regions=[Region.from_operation_list(region_args)])
-      addr_lookup=fir.AddressOf.create(attributes={"symbol": SymbolRefAttr.from_str("_QFE"+var_name.data)}, result_types=[fir.ReferenceType([type])])
+      addr_lookup=fir.AddressOf.create(attributes={"symbol": SymbolRefAttr("_QFE"+var_name.data)}, result_types=[fir.ReferenceType([type])])
       program_state.appendToGlobal(glob)
       ctx[var_name.data] = addr_lookup.results[0]
       return [addr_lookup]
@@ -580,7 +580,7 @@ def translate_gpu_loop(ctx: SSAValueCtx, gpu_stmt: Operation, program_state : Pr
     pass # Need to add in ability to append GPU function here
 
   # Hacking in the "@" character on the GPU function name here
-  launch_fn=gpu.LaunchFuncOp.create(attributes={"kernel":SymbolRefAttr.from_str("gpu_fns.@gpu_fn_"+str(program_state.getNumGPUFns()))})
+  launch_fn=gpu.LaunchFuncOp.create(attributes={"kernel":SymbolRefAttr("gpu_fns.@gpu_fn_"+str(program_state.getNumGPUFns()))})
   program_state.incrementNumGPUFns()
   return [launch_fn]
 
@@ -777,15 +777,15 @@ def translate_print_intrinsic_call_expr(ctx: SSAValueCtx,
     # Start the IO session
     filename_str_op=generate_string_literal("./dummy.F90", program_state)
     arg1=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(-1, 32)}, result_types=[i32])
-    arg2=fir.Convert.create(operands=[filename_str_op.results[0]], result_types=[fir.ReferenceType([IntegerType.from_width(8)])])
+    arg2=fir.Convert.create(operands=[filename_str_op.results[0]], result_types=[fir.ReferenceType([IntegerType(8)])])
     arg3=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(3, 32)}, result_types=[i32])
 
-    call1=fir.Call.create(attributes={"callee": SymbolRefAttr.from_str("_FortranAioBeginExternalListOutput")}, operands=[arg1.results[0],
-      arg2.results[0], arg3.results[0]], result_types=[fir.ReferenceType([IntegerType.from_width(8)])])
+    call1=fir.Call.create(attributes={"callee": SymbolRefAttr("_FortranAioBeginExternalListOutput")}, operands=[arg1.results[0],
+      arg2.results[0], arg3.results[0]], result_types=[fir.ReferenceType([IntegerType(8)])])
     arg_operands.extend([filename_str_op, arg1, arg2, arg3, call1])
 
-    insertExternalFunctionToGlobalState(program_state, "_FortranAioBeginExternalListOutput", [i32, fir.ReferenceType([IntegerType.from_width(8)]),
-      i32], fir.ReferenceType([IntegerType.from_width(8)]))
+    insertExternalFunctionToGlobalState(program_state, "_FortranAioBeginExternalListOutput", [i32, fir.ReferenceType([IntegerType(8)]),
+      i32], fir.ReferenceType([IntegerType(8)]))
 
     # Ignore first argument as it will be a star
     for argument in call_expr.args.blocks[0].ops[1:]:
@@ -807,11 +807,11 @@ def translate_print_intrinsic_call_expr(ctx: SSAValueCtx,
           arg_operands.extend(generatePrintForString(program_state, op[0], arg, call1.results[0]))
 
     # Close out the IO
-    call3=fir.Call.create(attributes={"callee": SymbolRefAttr.from_str("_FortranAioEndIoStatement")}, operands=[call1.results[0]],
-      result_types=[IntegerType.from_width(32)])
+    call3=fir.Call.create(attributes={"callee": SymbolRefAttr("_FortranAioEndIoStatement")}, operands=[call1.results[0]],
+      result_types=[IntegerType(32)])
     arg_operands.extend([call3])
 
-    insertExternalFunctionToGlobalState(program_state, "_FortranAioEndIoStatement", [fir.ReferenceType([IntegerType.from_width(8)])], i32)
+    insertExternalFunctionToGlobalState(program_state, "_FortranAioEndIoStatement", [fir.ReferenceType([IntegerType(8)])], i32)
 
     return arg_operands
 
@@ -832,9 +832,9 @@ def generatePrintForIntegerOrFloat(program_state, op, arg, init_call_ssa):
         raise Exception(f"Could not translate float type`{arg.typ}' as only 32 or 64 bit supported")
     else:
       raise Exception(f"Could not translate type`{arg.typ}' for printing")
-    print_call=fir.Call.create(attributes={"callee": SymbolRefAttr.from_str(fn_name)}, operands=[init_call_ssa,
-          arg], result_types=[IntegerType.from_width(1)])
-    insertExternalFunctionToGlobalState(program_state, fn_name, [init_call_ssa.typ, arg.typ], IntegerType.from_width(1))
+    print_call=fir.Call.create(attributes={"callee": SymbolRefAttr(fn_name)}, operands=[init_call_ssa,
+          arg], result_types=[IntegerType(1)])
+    insertExternalFunctionToGlobalState(program_state, fn_name, [init_call_ssa.typ, arg.typ], IntegerType(1))
     return [op, print_call]
 
 def generatePrintForString(program_state, op, arg, init_call_ssa):
@@ -842,12 +842,12 @@ def generatePrintForString(program_state, op, arg, init_call_ssa):
     to_num=arg.typ.type.to_index.data
     string_length=((to_num-from_num)+1)
     str_len=arith.Constant.create(attributes={"value": IntegerAttr.from_index_int_value(string_length)}, result_types=[IndexType()])
-    arg2_2=fir.Convert.create(operands=[arg], result_types=[fir.ReferenceType([IntegerType.from_width(8)])])
+    arg2_2=fir.Convert.create(operands=[arg], result_types=[fir.ReferenceType([IntegerType(8)])])
     arg3_2=fir.Convert.create(operands=[str_len.results[0]], result_types=[i64])
-    print_call=fir.Call.create(attributes={"callee": SymbolRefAttr.from_str("_FortranAioOutputAscii")}, operands=[init_call_ssa,
-          arg2_2.results[0], arg3_2.results[0]], result_types=[IntegerType.from_width(1)])
+    print_call=fir.Call.create(attributes={"callee": SymbolRefAttr("_FortranAioOutputAscii")}, operands=[init_call_ssa,
+          arg2_2.results[0], arg3_2.results[0]], result_types=[IntegerType(1)])
     insertExternalFunctionToGlobalState(program_state, "_FortranAioOutputAscii", [init_call_ssa.typ,
-        fir.ReferenceType([IntegerType.from_width(8)]), i64], IntegerType.from_width(1))
+        fir.ReferenceType([IntegerType(8)]), i64], IntegerType(1))
     return [op, str_len, arg2_2, arg3_2, print_call]
 
 def insertExternalFunctionToGlobalState(program_state, function_name, args, result_type):
@@ -883,7 +883,7 @@ def translate_deallocate_intrinsic_call_expr(ctx: SSAValueCtx,
     shape_operands=[]
     for i in range(num_deferred):
       shape_operands.append(zero_val_op.results[0])
-    shape_op=fir.Shape.create(operands=shape_operands, result_types=[fir.ShapeType([IntAttr.from_int(num_deferred)])])
+    shape_op=fir.Shape.create(operands=shape_operands, result_types=[fir.ShapeType([IntAttr(num_deferred)])])
     embox_op=fir.Embox.build(operands=[zero_bits_op.results[0], shape_op.results[0], [], []], regions=[[]], result_types=[box_type])
     store_op=fir.Store.create(operands=[embox_op.results[0], target_ssa])
 
@@ -912,7 +912,7 @@ def translate_allocate_intrinsic_call_expr(ctx: SSAValueCtx,
     array_type=get_nested_type(target_ssa.typ, fir.ArrayType)
 
     allocmem_op=fir.Allocmem.build(attributes={"in_type":array_type, "uniq_name": StringAttr(var_name+".alloc")}, operands=[[], args], regions=[[]], result_types=[heap_type])
-    shape_op=fir.Shape.create(operands=args, result_types=[fir.ShapeType([IntAttr.from_int(len(args))])])
+    shape_op=fir.Shape.create(operands=args, result_types=[fir.ShapeType([IntAttr(len(args))])])
     embox_op=fir.Embox.build(operands=[allocmem_op.results[0], shape_op.results[0], [], []], regions=[[]], result_types=[fir.BoxType([heap_type])])
     store_op=fir.Store.create(operands=[embox_op.results[0], target_ssa])
     ops+=[allocmem_op, shape_op, embox_op, store_op]
@@ -958,7 +958,7 @@ def translate_user_call_expr(ctx: SSAValueCtx,
             array_type=get_nested_type(type_to_reference, fir.ArrayType)
             val=array_type.shape.data[0].value.data
             constant_op=arith.Constant.create(attributes={"value": IntegerAttr.from_index_int_value(val)}, result_types=[IndexType()])
-            shape_op=fir.Shape.create(operands=[constant_op.results[0]], result_types=[fir.ShapeType([IntAttr.from_int(1)])])
+            shape_op=fir.Shape.create(operands=[constant_op.results[0]], result_types=[fir.ShapeType([IntAttr(1)])])
             embox_op=fir.Embox.build(operands=[arg, shape_op.results[0], [], []], regions=[[]], result_types=[fir.BoxType([array_type])])
             convert_op=fir.Convert.create(operands=[embox_op.results[0]], result_types=[fn_info.args[index]])
             ops+=[constant_op, shape_op, embox_op, convert_op]
@@ -972,9 +972,9 @@ def translate_user_call_expr(ctx: SSAValueCtx,
     # Need return type here for expression
     if is_expr:
       result_type=try_translate_type(call_expr.type)
-      call = fir.Call.create(attributes={"callee": SymbolRefAttr.from_str(fn_info.full_name)}, operands=args, result_types=[result_type])
+      call = fir.Call.create(attributes={"callee": SymbolRefAttr(fn_info.full_name)}, operands=args, result_types=[result_type])
     else:
-      call = fir.Call.create(attributes={"callee": SymbolRefAttr.from_str(fn_info.full_name)}, operands=args, result_types=[])
+      call = fir.Call.create(attributes={"callee": SymbolRefAttr(fn_info.full_name)}, operands=args, result_types=[])
     ops.append(call)
     return ops
 
@@ -1121,7 +1121,7 @@ def translate_unary_expr(ctx: SSAValueCtx,
 
   if (attr.data == "NOT"):
     constant_true=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(1, 1)},
-                                         result_types=[IntegerType.from_width(1)])
+                                         result_types=[IntegerType(1)])
     xori=arith.XOrI.get(expr_ssa_value, constant_true.results[0])
 
     return expr + [constant_true, xori], xori.results[0]
@@ -1202,7 +1202,7 @@ def get_arith_instance(operation:str, lhs, rhs, program_state : ProgramState):
       elif (lhs.typ == f64 or lhs.typ == f32) and (rhs.typ == i32):
         # Will call math.ipowi for integer, otherwise call into LLVM function directly
         call_name="llvm.powi."+str(lhs.typ)+".i32"
-        fn_call_op=fir.Call.create(attributes={"callee": SymbolRefAttr.from_str(call_name)},
+        fn_call_op=fir.Call.create(attributes={"callee": SymbolRefAttr(call_name)},
             operands=[lhs, rhs], result_types=[lhs.typ])
         insertExternalFunctionToGlobalState(program_state, call_name, [lhs.typ, rhs.typ], lhs.typ)
         return fn_call_op
@@ -1241,13 +1241,13 @@ def translate_literal(op: psy_ir.Literal, program_state : ProgramState) -> Opera
 
 def generate_string_literal(string, program_state : ProgramState) -> Operation:
     string_literal=string.replace("\"", "")
-    typ=fir.CharType([fir.IntAttr.from_int(1), fir.IntAttr.from_int(len(string_literal))])
+    typ=fir.CharType([fir.IntAttr(1), fir.IntAttr(len(string_literal))])
     string_lit_op=fir.StringLit.create(attributes={"size": IntegerAttr.from_int_and_width(len(string_literal), 64), "value": StringAttr(string_literal)}, result_types=[typ])
     has_val_op=fir.HasValue.create(operands=[string_lit_op.results[0]])
     str_uuid=uuid.uuid4().hex.upper()
-    glob=fir.Global.create(attributes={"linkName": StringAttr("linkonce"), "sym_name": StringAttr("_QQcl."+str_uuid), "symref": SymbolRefAttr.from_str("_QQcl."+str_uuid), "type": typ},
+    glob=fir.Global.create(attributes={"linkName": StringAttr("linkonce"), "sym_name": StringAttr("_QQcl."+str_uuid), "symref": SymbolRefAttr("_QQcl."+str_uuid), "type": typ},
       regions=[Region.from_operation_list([string_lit_op, has_val_op])])
     program_state.appendToGlobal(glob)
     ref_type=fir.ReferenceType([typ])
-    addr_lookup=fir.AddressOf.create(attributes={"symbol": SymbolRefAttr.from_str("_QQcl."+str_uuid)}, result_types=[ref_type])
+    addr_lookup=fir.AddressOf.create(attributes={"symbol": SymbolRefAttr("_QQcl."+str_uuid)}, result_types=[ref_type])
     return addr_lookup
