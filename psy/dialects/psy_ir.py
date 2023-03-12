@@ -71,6 +71,10 @@ class AnonymousAttr(ParametrizedAttribute):
 class DeferredAttr(ParametrizedAttribute):
     name = "deferred"
 
+@irdl_attr_definition
+class AssumedSizeAttr(ParametrizedAttribute):
+    name = "assumed_size"
+
 # Ideally would use vector, but need unknown dimension types (and ranges too!)
 @irdl_attr_definition
 class ArrayType(ParametrizedAttribute):
@@ -474,7 +478,7 @@ class UnaryOperation(Operation):
     def get(op: str,
             expr: Operation,
             verify_op: bool = True) -> BinaryExpr:
-        res = UnaryOperation.build(attributes={"op": op}, regions=[[expr]])
+        res = UnaryOperation.build(attributes={"op": StringAttr(op)}, regions=[[expr]])
         if verify_op:
             # We don't verify nested operations since they might have already been verified
             res.verify(verify_nested_ops=False)
@@ -498,7 +502,7 @@ class NaryOperation(Operation):
     def get(op: str,
             args: List[Operation],
             verify_op: bool = True) -> BinaryExpr:
-        res = UnaryOperation.build(attributes={"op": op}, regions=[args])
+        res = UnaryOperation.build(attributes={"op": StringAttr(op)}, regions=[args])
         if verify_op:
             # We don't verify nested operations since they might have already been verified
             res.verify(verify_nested_ops=False)
@@ -562,6 +566,7 @@ class psyIR:
         self.ctx.register_attr(AnonymousAttr)
         self.ctx.register_attr(DeferredAttr)
         self.ctx.register_attr(EmptyAttr)
+        self.ctx.register_attr(AssumedSizeAttr)
         self.ctx.register_attr(DerivedType)
         self.ctx.register_attr(NamedType)
         self.ctx.register_attr(ArrayType)
