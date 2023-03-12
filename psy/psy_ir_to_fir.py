@@ -1135,8 +1135,8 @@ def get_expression_conversion_type(lhs_type, rhs_type):
   if isinstance(lhs_type, Float16Type):
     if isintance(rhs_type, Float32Type) or isintance(rhs_type, Float64Type): return rhs_type, None
   if isinstance(lhs_type, Float32Type):
-    if isintance(rhs_type, Float16Type): return None, lhs_type
-    if isintance(rhs_type, Float64Type): return rhs_type, None
+    if isinstance(rhs_type, Float16Type): return None, lhs_type
+    if isinstance(rhs_type, Float64Type): return rhs_type, None
   if isinstance(lhs_type, Float64Type):
     if isinstance(rhs_type, Float16Type) or isinstance(rhs_type, Float32Type): return None, lhs_type,
   return None, None
