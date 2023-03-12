@@ -2,6 +2,7 @@ from __future__ import annotations
 from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerType, ArrayAttr, i32, i64, f32, f64, IndexType, DictionaryAttr, IntAttr,
       Float16Type, Float32Type, Float64Type, FloatAttr, UnitAttr, DenseIntOrFPElementsAttr, VectorType, SymbolRefAttr, AnyFloat)
 from xdsl.dialects import func, arith, cf, mpi #, gpu
+from xdsl.dialects.experimental import math
 from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext, BlockArgument
 from psy.dialects import psy_ir, hstencil #, hpc_gpu
 #from xdsl.dialects.experimental import stencil
@@ -13,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Dict
 
 binary_arith_op_matching={"ADD": [arith.Addi, arith.Addf], "SUB":[arith.Subi, arith.Subf], "MUL": [arith.Muli, arith.Mulf], "DIV": [arith.DivSI, arith.Divf], "REM": [arith.RemSI, None],
-"MIN" : [arith.MinSI, arith.Minf], "MAX" : [arith.MaxSI, arith.Maxf]}
+"MIN" : [arith.MinSI, arith.Minf], "MAX" : [arith.MaxSI, arith.Maxf], "POW" : [math.IPowIOp, None, None]}
 
 binary_arith_psy_to_arith_comparison_op={"EQ": "eq", "NE": "ne", "GT": "sgt", "LT": "slt", "GE": "sge", "LE": "sle"}
 
@@ -1125,6 +1126,10 @@ def translate_unary_expr(ctx: SSAValueCtx,
 
     return expr + [constant_true, xori], xori.results[0]
 
+  if (attr.data == "SQRT"):
+    sqrt_op=math.SqrtOp.create(operands=[expr_ssa_value], result_types=[expr_ssa_value.typ])
+    return expr + [sqrt_op], sqrt_op.results[0]
+
 def get_expression_conversion_type(lhs_type, rhs_type):
   if isinstance(lhs_type, IntegerType):
     if isinstance(rhs_type, IntegerType):
@@ -1180,16 +1185,29 @@ def translate_binary_expr(
     attr = binary_expr.op
     assert isinstance(attr, Attribute)
 
-    fir_binary_expr=get_arith_instance(binary_expr.op.data, lhs_ssa_value, rhs_ssa_value)
+    fir_binary_expr=get_arith_instance(binary_expr.op.data, lhs_ssa_value, rhs_ssa_value, program_state)
 
     return lhs + rhs + [fir_binary_expr], fir_binary_expr.results[0]
 
-def get_arith_instance(operation:str, lhs, rhs):
+def get_arith_instance(operation:str, lhs, rhs, program_state : ProgramState):
   operand_type = lhs.typ
   if operation in binary_arith_op_matching:
     if isinstance(operand_type, IntegerType): index=0
     if isinstance(operand_type, Float16Type) or isinstance(operand_type, Float32Type) or isinstance(operand_type, Float64Type): index=1
     op_instance=binary_arith_op_matching[operation][index]
+    if op_instance is None and operation == "POW":
+      if (lhs.typ == f64 or lhs.typ == f32) and (rhs.typ == f64 or rhs.typ == f32):
+        # Use math.powf
+        return math.PowFOp.get(lhs, rhs)
+      elif (lhs.typ == f64 or lhs.typ == f32) and (rhs.typ == i32):
+        # Will call math.ipowi for integer, otherwise call into LLVM function directly
+        call_name="llvm.powi."+str(lhs.typ)+".i32"
+        fn_call_op=fir.Call.create(attributes={"callee": SymbolRefAttr.from_str(call_name)},
+            operands=[lhs, rhs], result_types=[lhs.typ])
+        insertExternalFunctionToGlobalState(program_state, call_name, [lhs.typ, rhs.typ], lhs.typ)
+        return fn_call_op
+      else:
+        raise Exception(f"Could not translate `{lhs.typ}' and '{rhs.typ}' for POW operation")
     assert op_instance is not None, "Operation "+operation+" not implemented for type"
     return op_instance.get(lhs, rhs)
 
@@ -1202,6 +1220,8 @@ def get_arith_instance(operation:str, lhs, rhs):
 
   if operation in binary_arith_psy_to_arith_comparison_op:
     return arith.Cmpi.from_mnemonic(lhs, rhs, binary_arith_psy_to_arith_comparison_op[operation])
+
+  return None
 
 def translate_literal(op: psy_ir.Literal, program_state : ProgramState) -> Operation:
     value = op.attributes["value"]
