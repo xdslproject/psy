@@ -38,7 +38,7 @@ class DerivedType(ParametrizedAttribute):
 
     @staticmethod
     def from_str(type: str) -> DerivedType:
-        return DerivedType([StringAttr.from_str(type)])
+        return DerivedType([StringAttr(type)])
 
     @staticmethod
     def from_string_attr(data: StringAttr) -> DerivedType:
@@ -106,7 +106,7 @@ class ArrayType(ParametrizedAttribute):
         else:
           type=referenced_type
         return ArrayType([
-            ArrayAttr.from_list([(IntegerAttr.build(d) if isinstance(d, int) else d) for d in shape]),
+            ArrayAttr([(IntegerAttr.build(d) if isinstance(d, int) else d) for d in shape]),
             type]
         )
 
@@ -156,8 +156,8 @@ class Container(Operation):
             routines: List[Operation],
             verify_op: bool = True) -> Container:
       res = Container.build(attributes={"container_name": container_name, "default_visibility": default_visibility,
-                                        "is_program": False, "public_routines": ArrayAttr.from_list(public_routines),
-                                        "private_routines": ArrayAttr.from_list(private_routines)},
+                                        "is_program": False, "public_routines": ArrayAttr(public_routines),
+                                        "private_routines": ArrayAttr(private_routines)},
                                         regions=[imports, routines])
       if verify_op:
         res.verify(verify_nested_ops=False)
@@ -177,7 +177,7 @@ class Import(Operation):
     def get(import_name: str,
             specific_procedures: List[str],
             verify_op: bool = True) -> Container:
-      res = Import.build(attributes={"import_name": import_name, "specific_procedures": ArrayAttr.from_list(specific_procedures)})
+      res = Import.build(attributes={"import_name": import_name, "specific_procedures": ArrayAttr(specific_procedures)})
       if verify_op:
         res.verify(verify_nested_ops=False)
       return res
@@ -212,7 +212,7 @@ class Routine(Operation):
           routine_name=StringAttr(routine_name)
 
         res = Routine.build(attributes={"routine_name": routine_name, "return_var": return_var,
-                                        "args": ArrayAttr.from_list(args), "is_program": BoolAttr(is_program)},
+                                        "args": ArrayAttr(args), "is_program": BoolAttr(is_program)},
                                         regions=[imports, local_var_declarations, routine_body])
         if verify_op:
             # We don't verify nested operations since they might have already been verified
@@ -349,9 +349,9 @@ class Literal(Operation):
         if type(value) is int:
             attr = IntegerAttr.from_int_and_width(value, width)
         elif type(value) is float:
-            attr = FloatAttr.from_float_and_width(value, width)
+            attr = FloatAttr(value, width)
         elif type(value) is str:
-            attr = StringAttr.from_str(value)
+            attr = StringAttr(value)
         else:
             raise Exception(f"Unknown literal of type {type(value)}")
         res = Literal.create(attributes={"value": attr})
