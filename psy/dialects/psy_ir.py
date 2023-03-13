@@ -23,9 +23,8 @@ class BoolAttr(Data[bool]):
         raise Exception(f"bool parsing resulted in {data}")
         return None
 
-    @staticmethod
-    def print_parameter(data: bool, printer: Printer) -> None:
-        printer.print_string(f'"{data}"')
+    def print_parameter(self, printer: Printer) -> None:
+        printer.print_string(f'"{self.data}"')
 
     @staticmethod
     def from_bool(data: bool) -> BoolAttr:
