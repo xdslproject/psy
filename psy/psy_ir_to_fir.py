@@ -1,6 +1,6 @@
 from __future__ import annotations
 from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerType, ArrayAttr, i32, i64, f32, f64, IndexType, DictionaryAttr, IntAttr,
-      Float16Type, Float32Type, Float64Type, FloatAttr, UnitAttr, DenseIntOrFPElementsAttr, VectorType, SymbolRefAttr, AnyFloat)
+      Float16Type, Float32Type, Float64Type, FloatAttr, UnitAttr, DenseIntOrFPElementsAttr, SymbolRefAttr, AnyFloat)
 from xdsl.dialects import func, arith, cf, mpi #, gpu
 from xdsl.dialects.experimental import math
 from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext, BlockArgument
@@ -363,6 +363,20 @@ def try_translate_def(ctx: SSAValueCtx,
     else:
         return None
 
+def define_derived_var(ctx: SSAValueCtx,
+                      var_def: psy_ir.VarDef, program_state : ProgramState) -> List[Operation]:
+    var_name = var_def.var.var_name
+    assert isinstance(var_name, StringAttr)
+    assert isinstance(var_def.var.type, psy_ir.DerivedType)
+    type_name=var_def.var.type.type.data
+    if type_name == "mpi_request":
+      constant=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(1, 32)}, result_types=[i32])
+      mpi_request_alloc=mpi.AllocateTypeOp.get(var_name, mpi.RequestType(), constant.results[0])
+      ctx[var_name.data] = mpi_request_alloc.results[0]
+      return [constant, mpi_request_alloc]
+    else:
+      raise Exception(f"Could not translate derived type `{type_name}' as this is unknown")
+
 def define_scalar_var(ctx: SSAValueCtx,
                       var_def: psy_ast.VarDef, program_state : ProgramState) -> List[Operation]:
     var_name = var_def.var.var_name
@@ -382,35 +396,46 @@ def define_scalar_var(ctx: SSAValueCtx,
 def define_array_var(ctx: SSAValueCtx,
                       var_def: psy_ast.VarDef, program_state : ProgramState) -> List[Operation]:
     var_name = var_def.var.var_name
-    type = try_translate_type(var_def.var.type)
-    num_deferred=count_array_type_contains_deferred(type)
-
-    region_args=[]
-    if num_deferred:
-      heap_type=fir.HeapType([type])
-      type=fir.BoxType([heap_type])
-      zero_bits=fir.ZeroBits.create(result_types=[heap_type])
-      zero_val=arith.Constant.create(attributes={"value": IntegerAttr.from_index_int_value(0)},
-                                         result_types=[IndexType()])
-      shape_ops=[]
-      for i in range(num_deferred):
-        shape_ops.append(zero_val.results[0])
-      shape=fir.Shape.create(operands=shape_ops, result_types=[fir.ShapeType([IntAttr(num_deferred)])])
-      embox=fir.Embox.build(operands=[zero_bits.results[0], shape.results[0], [], []], regions=[[]], result_types=[type])
-      has_val=fir.HasValue.create(operands=[embox.results[0]])
-      region_args=[zero_bits, zero_val, shape, embox, has_val]
-
-      glob=fir.Global.create(attributes={"linkName": StringAttr("internal"), "sym_name": StringAttr("_QFE"+var_name.data), "symref": SymbolRefAttr("_QFE"+var_name.data), "type": type},
-          regions=[Region.from_operation_list(region_args)])
-      addr_lookup=fir.AddressOf.create(attributes={"symbol": SymbolRefAttr("_QFE"+var_name.data)}, result_types=[fir.ReferenceType([type])])
-      program_state.appendToGlobal(glob)
-      ctx[var_name.data] = addr_lookup.results[0]
-      return [addr_lookup]
+    if isinstance(var_def.var.type.element_type, psy_ir.DerivedType):
+      type_name=var_def.var.type.element_type.type.data
+      if type_name == "mpi_request":
+        sizes=get_array_sizes(var_def.var.type)
+        constant=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(sizes[0], 32)}, result_types=[i32])
+        mpi_request_alloc=mpi.AllocateTypeOp.get(var_name, mpi.RequestType(), constant.results[0])
+        ctx[var_name.data] = mpi_request_alloc.results[0]
+        return [constant, mpi_request_alloc]
+      else:
+        raise Exception(f"Unknown how to handle user derived type `{type_name}' in array definition")
     else:
-      fir_var_def = fir.Alloca.build(attributes={"bindc_name": var_name, "uniq_name": StringAttr(generateVariableUniqueName(program_state, var_name.data)),
-        "in_type":type}, operands=[[],[]], regions=[[]], result_types=[fir.ReferenceType([type])])
-      ctx[var_name.data] = fir_var_def.results[0]
-      return [fir_var_def]
+      type = try_translate_type(var_def.var.type)
+      num_deferred=count_array_type_contains_deferred(type)
+
+      region_args=[]
+      if num_deferred:
+        heap_type=fir.HeapType([type])
+        type=fir.BoxType([heap_type])
+        zero_bits=fir.ZeroBits.create(result_types=[heap_type])
+        zero_val=arith.Constant.create(attributes={"value": IntegerAttr.from_index_int_value(0)},
+                                           result_types=[IndexType()])
+        shape_ops=[]
+        for i in range(num_deferred):
+          shape_ops.append(zero_val.results[0])
+        shape=fir.Shape.create(operands=shape_ops, result_types=[fir.ShapeType([IntAttr(num_deferred)])])
+        embox=fir.Embox.build(operands=[zero_bits.results[0], shape.results[0], [], []], regions=[[]], result_types=[type])
+        has_val=fir.HasValue.create(operands=[embox.results[0]])
+        region_args=[zero_bits, zero_val, shape, embox, has_val]
+
+        glob=fir.Global.create(attributes={"linkName": StringAttr("internal"), "sym_name": StringAttr("_QFE"+var_name.data), "symref": SymbolRefAttr("_QFE"+var_name.data), "type": type},
+            regions=[Region.from_operation_list(region_args)])
+        addr_lookup=fir.AddressOf.create(attributes={"symbol": SymbolRefAttr("_QFE"+var_name.data)}, result_types=[fir.ReferenceType([type])])
+        program_state.appendToGlobal(glob)
+        ctx[var_name.data] = addr_lookup.results[0]
+        return [addr_lookup]
+      else:
+        fir_var_def = fir.Alloca.build(attributes={"bindc_name": var_name, "uniq_name": StringAttr(generateVariableUniqueName(program_state, var_name.data)),
+          "in_type":type}, operands=[[],[]], regions=[[]], result_types=[fir.ReferenceType([type])])
+        ctx[var_name.data] = fir_var_def.results[0]
+        return [fir_var_def]
 
 def count_array_type_contains_deferred(type):
   occurances=0
@@ -425,6 +450,8 @@ def translate_var_def(ctx: SSAValueCtx,
       return define_scalar_var(ctx, var_def, program_state)
     elif isinstance(var_def.var.type, psy_ir.ArrayType):
       return define_array_var(ctx, var_def, program_state)
+    elif isinstance(var_def.var.type, psy_ir.DerivedType):
+      return define_derived_var(ctx, var_def, program_state)
 
 def try_translate_type(op: Operation) -> Optional[Attribute]:
     """Tries to translate op as a type, returns None otherwise."""
@@ -672,6 +699,7 @@ def translate_assign(ctx: SSAValueCtx,
       translated_target=lhs_var
     else:
       translated_target = ctx[assign.lhs.op.id.data]
+
     target_conversion_type=get_store_conversion_if_needed(translated_target.typ, value_var.typ)
     if target_conversion_type is not None:
       if isinstance(value_var.typ, fir.ReferenceType):
@@ -698,23 +726,68 @@ def translate_intrinsic_call_expr(ctx: SSAValueCtx,
     intrinsic_name=call_expr.attributes["func"].data
     if intrinsic_name == "allocate":
       return translate_allocate_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
-    if intrinsic_name == "deallocate":
+    elif intrinsic_name == "deallocate":
       return translate_deallocate_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
-    if intrinsic_name.lower() == "print":
+    elif intrinsic_name.lower() == "print":
       return translate_print_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
-    if intrinsic_name.lower() == "mpi_commrank":
+    elif intrinsic_name.lower() == "mpi_commrank":
       return translate_mpi_commrank_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
-    if intrinsic_name.lower() == "mpi_commsize":
+    elif intrinsic_name.lower() == "mpi_commsize":
       return translate_mpi_commsize_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
-    if intrinsic_name.lower() == "mpi_send":
+    elif intrinsic_name.lower() == "mpi_send":
       return translate_mpi_send_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
-    if intrinsic_name.lower() == "mpi_recv":
+    elif intrinsic_name.lower() == "mpi_isend":
+      return translate_mpi_send_intrinsic_call_expr(ctx, call_expr, program_state, is_expr, False)
+    elif intrinsic_name.lower() == "mpi_recv":
       return translate_mpi_recv_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
+    elif intrinsic_name.lower() == "mpi_irecv":
+      return translate_mpi_recv_intrinsic_call_expr(ctx, call_expr, program_state, is_expr, False)
+    elif intrinsic_name.lower() == "mpi_wait":
+      return translate_mpi_wait_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
+    elif intrinsic_name.lower() == "mpi_waitall":
+      return translate_mpi_waitall_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
+    else:
+      raise Exception(f"Could not translate intrinsic`{intrinsic_name}' as unknown")
 
-def translate_mpi_send_intrinsic_call_expr(ctx: SSAValueCtx,
+def translate_mpi_wait_intrinsic_call_expr(ctx: SSAValueCtx,
                              call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
     program_state.setRequiresMPI(True)
-    assert len(call_expr.args.blocks[0].ops) == 4
+    assert len(call_expr.args.blocks[0].ops) == 1
+
+    to_return=[]
+    request_op, request_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[0], program_state)
+    if request_op is not None: to_return+=request_op
+
+    if isinstance(request_arg.typ, mpi.VectorType):
+      element_index=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(0, 32)},
+                                         result_types=[i32])
+      load_op=mpi.VectorGetOp.get(request_arg, element_index.results[0])
+      wait_op=mpi.Wait.get(load_op.results[0])
+      to_return+=[element_index, load_op, wait_op]
+    else:
+      wait_op=mpi.Wait.get(request_arg)
+      to_return.append(wait_op)
+
+    return to_return
+
+def translate_mpi_waitall_intrinsic_call_expr(ctx: SSAValueCtx,
+                             call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
+    program_state.setRequiresMPI(True)
+    assert len(call_expr.args.blocks[0].ops) == 2
+
+    request_ops, request_args = translate_expr(ctx, call_expr.args.blocks[0].ops[0], program_state)
+    count_op, count_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[1], program_state)
+    wait_op=mpi.WaitAll.get(request_args, count_arg)
+    return count_op + [wait_op]
+
+
+def translate_mpi_send_intrinsic_call_expr(ctx: SSAValueCtx,
+                             call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False, blocking=True) -> List[Operation]:
+    program_state.setRequiresMPI(True)
+    if blocking:
+      assert len(call_expr.args.blocks[0].ops) == 4
+    else:
+      assert len(call_expr.args.blocks[0].ops) == 5
     assert isinstance(call_expr.args.blocks[0].ops[0], psy_ir.ExprName)
 
     ptr_type=try_translate_type(call_expr.args.blocks[0].ops[0].var.type)
@@ -728,14 +801,35 @@ def translate_mpi_send_intrinsic_call_expr(ctx: SSAValueCtx,
     target_op, target_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[2], program_state)
     tag_op, tag_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[3], program_state)
     get_mpi_dtype_op=mpi.GetDtypeOp.get(ptr_type)
-    mpi_send_op=mpi.Send.get(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], target_arg, tag_arg)
 
-    return buffer_op + count_op + target_op + tag_op + [convert_buffer, get_mpi_dtype_op, mpi_send_op]
+    result_ops=buffer_op + count_op + target_op + tag_op + [convert_buffer, get_mpi_dtype_op]
+
+    if blocking:
+      mpi_send_op=mpi.Send.get(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], target_arg, tag_arg)
+      result_ops.append(mpi_send_op)
+    else:
+      request_op, request_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[4], program_state)
+      if request_op is not None: result_ops+=request_op
+
+      if isinstance(request_arg.typ, mpi.VectorType):
+        element_index=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(0, 32)},
+                                         result_types=[i32])
+        load_op=mpi.VectorGetOp.get(request_arg, element_index.results[0])
+        mpi_send_op=mpi.Isend.get(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], target_arg, tag_arg, load_op.results[0])
+        result_ops+=[element_index, load_op, mpi_send_op]
+      else:
+        mpi_send_op=mpi.Isend.get(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], target_arg, tag_arg, request_arg)
+        result_ops.append(mpi_send_op)
+
+    return result_ops
 
 def translate_mpi_recv_intrinsic_call_expr(ctx: SSAValueCtx,
-                             call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
+                             call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False, blocking=True) -> List[Operation]:
     program_state.setRequiresMPI(True)
-    assert len(call_expr.args.blocks[0].ops) == 4
+    if blocking:
+      assert len(call_expr.args.blocks[0].ops) == 4
+    else:
+      assert len(call_expr.args.blocks[0].ops) == 5
     assert isinstance(call_expr.args.blocks[0].ops[0], psy_ir.ExprName)
 
     ptr_type=try_translate_type(call_expr.args.blocks[0].ops[0].var.type)
@@ -749,9 +843,27 @@ def translate_mpi_recv_intrinsic_call_expr(ctx: SSAValueCtx,
     source_op, source_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[2], program_state)
     tag_op, tag_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[3], program_state)
     get_mpi_dtype_op=mpi.GetDtypeOp.get(ptr_type)
-    mpi_recv_op=mpi.Recv.get(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], source_arg, tag_arg)
 
-    return buffer_op + count_op + source_op + tag_op + [convert_buffer, get_mpi_dtype_op, mpi_recv_op]
+    result_ops=buffer_op + count_op + source_op + tag_op + [convert_buffer, get_mpi_dtype_op]
+
+    if blocking:
+      mpi_recv_op=mpi.Recv.get(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], source_arg, tag_arg)
+      result_ops.append(mpi_recv_op)
+    else:
+      request_op, request_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[4], program_state)
+      if request_op is not None: result_ops+=request_op
+
+      if isinstance(request_arg.typ, mpi.VectorType):
+        element_index=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(0, 32)},
+                                         result_types=[i32])
+        load_op=mpi.VectorGetOp.get(request_arg, element_index.results[0])
+        mpi_recv_op=mpi.Irecv.get(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], source_arg, tag_arg, load_op.results[0])
+        result_ops+=[element_index, load_op, mpi_recv_op]
+      else:
+        mpi_recv_op=mpi.Irecv.get(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], source_arg, tag_arg, request_arg)
+        result_ops.append(mpi_recv_op)
+
+    return result_ops
 
 def type_to_mpi_datatype(typ):
   if typ==i32:
@@ -1011,6 +1123,8 @@ def try_translate_expr(
       # We are limited here with type handling, need other floats - maybe a better way of doing this?
       if isinstance(ssa_value.typ, fir.ArrayType):
         return None, ssa_value
+      elif isinstance(ssa_value.typ, mpi.VectorType):
+        return None, ssa_value
       elif isinstance(ssa_value.typ.type, IntegerType):
         result_type=i32
       elif isinstance(ssa_value.typ.type, Float32Type):
@@ -1045,6 +1159,15 @@ def try_translate_expr(
 
     assert False, "Unknown Expression"
 
+def unpack_mpi_array(ctx: SSAValueCtx, op: psy_ir.ArrayReference, program_state : ProgramState):
+    assert isinstance(ctx[op.var.var_name.data].typ, mpi.VectorType)
+    # For now just support one dimensional access here to keep simple
+    assert len(op.accessors.blocks[0].ops) == 1
+    expr, ssa=try_translate_expr(ctx, op.accessors.blocks[0].ops[0], program_state)
+
+    access_op=mpi.VectorGetOp.get(ctx[op.var.var_name.data], ssa)
+    return expr+[access_op], access_op.results[0]
+
 def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, program_state : ProgramState):
   expressions=[]
   ssa_list=[]
@@ -1052,6 +1175,10 @@ def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, 
   boxdims_subtractor=None
 
   base_type=None
+
+  if isinstance(ctx[op.var.var_name.data].typ, mpi.VectorType):
+    # If this is an mpi array then we handle it differently
+    return unpack_mpi_array(ctx, op, program_state)
 
   if (has_nested_type(ctx[op.var.var_name.data].typ, fir.BoxType) and has_nested_type(ctx[op.var.var_name.data].typ, fir.HeapType)):
     # We need to debox this
