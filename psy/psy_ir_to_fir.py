@@ -795,6 +795,15 @@ def translate_mpi_send_intrinsic_call_expr(ctx: SSAValueCtx,
     if isinstance(ptr_type, fir.ArrayType): ptr_type=ptr_type.type
 
     buffer_op, buffer_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[0], program_state)
+    if not isinstance(buffer_arg.typ, fir.ReferenceType):
+      if isinstance(buffer_op, list) and len(buffer_op) == 1 and isinstance(buffer_op[0], fir.Load):
+        # We do this as translate expression assumes we want to use the value rather than the reference,
+        # so it loads the value from the fir.referencetype, hence we go in and grab the reference type.
+        # This is needed if a scalar is passed to the call as the buffer argument
+        buffer_arg=buffer_op[0].memref
+      else:
+        raise Exception(f"MPI Send/Isend buffer argument`{buffer_arg}' is not a reference and can not be translated")
+
     convert_buffer=fir.Convert.create(operands=[buffer_arg],
                     result_types=[fir.LLVMPointerType([ptr_type])])
     count_op, count_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[1], program_state)
@@ -802,7 +811,7 @@ def translate_mpi_send_intrinsic_call_expr(ctx: SSAValueCtx,
     tag_op, tag_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[3], program_state)
     get_mpi_dtype_op=mpi.GetDtypeOp.get(ptr_type)
 
-    result_ops=buffer_op + count_op + target_op + tag_op + [convert_buffer, get_mpi_dtype_op]
+    result_ops=count_op + target_op + tag_op + [convert_buffer, get_mpi_dtype_op]
 
     if blocking:
       mpi_send_op=mpi.Send.get(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], target_arg, tag_arg)
@@ -837,6 +846,15 @@ def translate_mpi_recv_intrinsic_call_expr(ctx: SSAValueCtx,
     if isinstance(ptr_type, fir.ArrayType): ptr_type=ptr_type.type
 
     buffer_op, buffer_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[0], program_state)
+    if not isinstance(buffer_arg.typ, fir.ReferenceType):
+      if isinstance(buffer_op, list) and len(buffer_op) == 1 and isinstance(buffer_op[0], fir.Load):
+        # We do this as translate expression assumes we want to use the value rather than the reference,
+        # so it loads the value from the fir.referencetype, hence we go in and grab the reference type.
+        # This is needed if a scalar is passed to the call as the buffer argument
+        buffer_arg=buffer_op[0].memref
+      else:
+        raise Exception(f"MPI Recv/Irecv buffer argument`{buffer_arg}' is not a reference and can not be translated")
+
     convert_buffer=fir.Convert.create(operands=[buffer_arg],
                     result_types=[fir.LLVMPointerType([ptr_type])])
     count_op, count_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[1], program_state)
@@ -844,7 +862,7 @@ def translate_mpi_recv_intrinsic_call_expr(ctx: SSAValueCtx,
     tag_op, tag_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[3], program_state)
     get_mpi_dtype_op=mpi.GetDtypeOp.get(ptr_type)
 
-    result_ops=buffer_op + count_op + source_op + tag_op + [convert_buffer, get_mpi_dtype_op]
+    result_ops=count_op + source_op + tag_op + [convert_buffer, get_mpi_dtype_op]
 
     if blocking:
       mpi_recv_op=mpi.Recv.get(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], source_arg, tag_arg)
