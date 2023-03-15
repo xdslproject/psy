@@ -1,6 +1,6 @@
 from __future__ import annotations
 from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerType, ArrayAttr, i32, i64, f32, f64, IndexType, DictionaryAttr, IntAttr,
-      Float16Type, Float32Type, Float64Type, FloatAttr, UnitAttr, DenseIntOrFPElementsAttr, SymbolRefAttr, AnyFloat)
+      Float16Type, Float32Type, Float64Type, FloatAttr, UnitAttr, DenseIntOrFPElementsAttr, SymbolRefAttr, AnyFloat, TupleType)
 from xdsl.dialects import func, arith, cf, mpi #, gpu
 from xdsl.dialects.experimental import math
 from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext, BlockArgument
@@ -140,13 +140,40 @@ def psy_ir_to_fir(ctx: MLContext, input_module: ModuleOp):
     #applyModuleUseToFloatingRegions(res_module, collectContainerNames(res_module))
     res_module.regions[0].move_blocks(input_module.regions[0])
     # Create program entry point
-    #check_program_entry_point(input_module)
+    op=get_program_entry_point(input_module)
+    if (op.attributes["sym_visibility"].data == "private"):
+      # Remove private from function visibility
+      del op.attributes["sym_visibility"]
+    apply_environment_to_module(input_module)
 
-def check_program_entry_point(module: ModuleOp):
+def get_program_entry_point(module: ModuleOp):
   for op in module.ops:
     if isinstance(op, func.FuncOp):
-      if op.sym_name.data=="_QQmain": return
-  assert False, "No program entry point"
+      if op.sym_name.data=="_QQmain": return op
+  assert False, "No program entry point, need a procedure called main"
+
+def apply_environment_to_module(module: ModuleOp):
+  if not check_has_environment(module):
+    # No environment, therefore we need to insert this
+    array_type=fir.ArrayType.from_two_type(fir.ReferenceType([IntegerType(8)]), fir.ReferenceType([IntegerType(8)]))
+    tuple_type=TupleType([i32, fir.ReferenceType([array_type])])
+    typ=fir.ReferenceType([tuple_type])
+    zero_bits=fir.ZeroBits.create(result_types=[typ])
+    has_value=fir.HasValue.create(operands=[zero_bits.results[0]])
+
+    region_args=[zero_bits, has_value]
+
+    glob=fir.Global.create(attributes={"sym_name": StringAttr("_QQEnvironmentDefaults"),
+                                      "symref": SymbolRefAttr("_QQEnvironmentDefaults"),
+                                      "type": typ, "constant": UnitAttr()},
+            regions=[Region.from_operation_list(region_args)])
+
+    module.regions[0].blocks[0].add_op(glob)
+
+def check_has_environment(module: ModuleOp):
+  for op in module.ops:
+    if isinstance(op, fir.Global) and op.sym_name.data == "_QQEnvironmentDefaults": return True
+  return False
 
 def translate_program(input_module: ModuleOp) -> ModuleOp:
     # create an empty global context
