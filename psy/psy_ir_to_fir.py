@@ -18,6 +18,10 @@ binary_arith_op_matching={"ADD": [arith.Addi, arith.Addf], "SUB":[arith.Subi, ar
 
 binary_arith_psy_to_arith_comparison_op={"EQ": "eq", "NE": "ne", "GT": "sgt", "LT": "slt", "GE": "sge", "LE": "sle"}
 
+str_to_mpi_operation={"max": mpi.MPI_MAX, "min": mpi.MPI_MIN, "sum": mpi.MPI_SUM, "prod": mpi.MPI_PROD, "land": mpi.MPI_LAND,
+  "band": mpi.MPI_BAND, "lor": mpi.MPI_LOR, "bor": mpi.MPI_BOR, "lxor": mpi.MPI_LXOR, "bxor": mpi.MPI_BXOR, "minloc": mpi.MPI_MINLOC,
+  "maxloc": mpi.MPI_MAXLOC, "replace": mpi.MPI_REPLACE, "no_op": mpi.MPI_NO_OP}
+
 gpu_module=None
 
 @dataclass
@@ -773,8 +777,55 @@ def translate_intrinsic_call_expr(ctx: SSAValueCtx,
       return translate_mpi_wait_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
     elif intrinsic_name.lower() == "mpi_waitall":
       return translate_mpi_waitall_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
+    elif intrinsic_name.lower() == "mpi_reduce":
+      return translate_mpi_reduce_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
     else:
       raise Exception(f"Could not translate intrinsic`{intrinsic_name}' as unknown")
+
+def translate_mpi_reduce_intrinsic_call_expr(ctx: SSAValueCtx,
+                             call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
+    program_state.setRequiresMPI(True)
+    assert len(call_expr.args.blocks[0].ops) == 5
+    assert isinstance(call_expr.args.blocks[0].ops[3], psy_ir.Literal)
+
+    send_ptr_type, send_buffer_op, send_buffer_arg = translate_mpi_buffer(ctx, call_expr.args.blocks[0].ops[0], program_state)
+    recv_ptr_type, recv_buffer_op, recv_buffer_arg = translate_mpi_buffer(ctx, call_expr.args.blocks[0].ops[1], program_state)
+
+    send_convert_buffer=fir.Convert.create(operands=[send_buffer_arg],
+                    result_types=[fir.LLVMPointerType([send_ptr_type])])
+    recv_convert_buffer=fir.Convert.create(operands=[recv_buffer_arg],
+                    result_types=[fir.LLVMPointerType([recv_ptr_type])])
+    count_op, count_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[2], program_state)
+    get_mpi_dtype_op=mpi.GetDtypeOp.get(send_ptr_type) # Do this on the send buffer type
+
+    mpi_op=str_to_mpi_operation[call_expr.args.blocks[0].ops[3].value.data]
+    root_op, root_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[4], program_state)
+
+    result_ops=count_op + root_op + [send_convert_buffer, recv_convert_buffer, get_mpi_dtype_op]
+
+    mpi_reduce_op=mpi.Reduce.get(send_convert_buffer.results[0], recv_convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], mpi_op, root_arg)
+    result_ops.append(mpi_reduce_op)
+
+    return result_ops
+
+
+def translate_mpi_buffer(ctx: SSAValueCtx, ops: psy_ir.ExprName, program_state : ProgramState):
+    assert isinstance(ops, psy_ir.ExprName)
+    ptr_type=try_translate_type(ops.var.type)
+    # Pointer type needs to be base type which might be wrapped in an array
+    if isinstance(ptr_type, fir.ArrayType): ptr_type=ptr_type.type
+
+    buffer_op, buffer_arg = translate_expr(ctx, ops, program_state)
+    if not isinstance(buffer_arg.typ, fir.ReferenceType):
+      if isinstance(buffer_op, list) and len(buffer_op) == 1 and isinstance(buffer_op[0], fir.Load):
+        # We do this as translate expression assumes we want to use the value rather than the reference,
+        # so it loads the value from the fir.referencetype, hence we go in and grab the reference type.
+        # This is needed if a scalar is passed to the call as the buffer argument
+        buffer_arg=buffer_op[0].memref
+      else:
+        raise Exception(f"Unable to process MPI argument`{buffer_arg}' as it is not a reference and can not be translated")
+    return ptr_type, buffer_op, buffer_arg
+
 
 def translate_mpi_wait_intrinsic_call_expr(ctx: SSAValueCtx,
                              call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
@@ -817,19 +868,7 @@ def translate_mpi_send_intrinsic_call_expr(ctx: SSAValueCtx,
       assert len(call_expr.args.blocks[0].ops) == 5
     assert isinstance(call_expr.args.blocks[0].ops[0], psy_ir.ExprName)
 
-    ptr_type=try_translate_type(call_expr.args.blocks[0].ops[0].var.type)
-    # Pointer type needs to be base type which might be wrapped in an array
-    if isinstance(ptr_type, fir.ArrayType): ptr_type=ptr_type.type
-
-    buffer_op, buffer_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[0], program_state)
-    if not isinstance(buffer_arg.typ, fir.ReferenceType):
-      if isinstance(buffer_op, list) and len(buffer_op) == 1 and isinstance(buffer_op[0], fir.Load):
-        # We do this as translate expression assumes we want to use the value rather than the reference,
-        # so it loads the value from the fir.referencetype, hence we go in and grab the reference type.
-        # This is needed if a scalar is passed to the call as the buffer argument
-        buffer_arg=buffer_op[0].memref
-      else:
-        raise Exception(f"MPI Send/Isend buffer argument`{buffer_arg}' is not a reference and can not be translated")
+    ptr_type, buffer_op, buffer_arg = translate_mpi_buffer(ctx, call_expr.args.blocks[0].ops[0], program_state)
 
     convert_buffer=fir.Convert.create(operands=[buffer_arg],
                     result_types=[fir.LLVMPointerType([ptr_type])])
@@ -868,19 +907,7 @@ def translate_mpi_recv_intrinsic_call_expr(ctx: SSAValueCtx,
       assert len(call_expr.args.blocks[0].ops) == 5
     assert isinstance(call_expr.args.blocks[0].ops[0], psy_ir.ExprName)
 
-    ptr_type=try_translate_type(call_expr.args.blocks[0].ops[0].var.type)
-    # Pointer type needs to be base type which might be wrapped in an array
-    if isinstance(ptr_type, fir.ArrayType): ptr_type=ptr_type.type
-
-    buffer_op, buffer_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[0], program_state)
-    if not isinstance(buffer_arg.typ, fir.ReferenceType):
-      if isinstance(buffer_op, list) and len(buffer_op) == 1 and isinstance(buffer_op[0], fir.Load):
-        # We do this as translate expression assumes we want to use the value rather than the reference,
-        # so it loads the value from the fir.referencetype, hence we go in and grab the reference type.
-        # This is needed if a scalar is passed to the call as the buffer argument
-        buffer_arg=buffer_op[0].memref
-      else:
-        raise Exception(f"MPI Recv/Irecv buffer argument`{buffer_arg}' is not a reference and can not be translated")
+    ptr_type, buffer_op, buffer_arg = translate_mpi_buffer(ctx, call_expr.args.blocks[0].ops[0], program_state)
 
     convert_buffer=fir.Convert.create(operands=[buffer_arg],
                     result_types=[fir.LLVMPointerType([ptr_type])])
