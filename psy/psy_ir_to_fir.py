@@ -835,24 +835,42 @@ def translate_mpi_reduce_intrinsic_call_expr(ctx: SSAValueCtx,
 def translate_mpi_allreduce_intrinsic_call_expr(ctx: SSAValueCtx,
                              call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
     program_state.setRequiresMPI(True)
-    assert len(call_expr.args.blocks[0].ops) == 4
-    assert isinstance(call_expr.args.blocks[0].ops[3], psy_ir.Literal)
+    assert len(call_expr.args.blocks[0].ops) == 4 or len(call_expr.args.blocks[0].ops) == 3
 
-    send_ptr_type, send_buffer_op, send_buffer_arg = translate_mpi_buffer(ctx, call_expr.args.blocks[0].ops[0], program_state)
-    recv_ptr_type, recv_buffer_op, recv_buffer_arg = translate_mpi_buffer(ctx, call_expr.args.blocks[0].ops[1], program_state)
+    has_send_buffer=len(call_expr.args.blocks[0].ops) == 4
 
-    send_convert_buffer=fir.Convert.create(operands=[send_buffer_arg],
+    if has_send_buffer:
+      send_buffer_idx=0
+      recv_buffer_idx=1
+      count_idx=2
+      mpi_op_idx=3
+    else:
+      recv_buffer_idx=0
+      count_idx=1
+      mpi_op_idx=2
+
+    assert isinstance(call_expr.args.blocks[0].ops[mpi_op_idx], psy_ir.Literal)
+
+    if has_send_buffer:
+      send_ptr_type, send_buffer_op, send_buffer_arg = translate_mpi_buffer(ctx, call_expr.args.blocks[0].ops[send_buffer_idx], program_state)
+      send_convert_buffer=fir.Convert.create(operands=[send_buffer_arg],
                     result_types=[fir.LLVMPointerType([send_ptr_type])])
+
+    recv_ptr_type, recv_buffer_op, recv_buffer_arg = translate_mpi_buffer(ctx, call_expr.args.blocks[0].ops[recv_buffer_idx], program_state)
     recv_convert_buffer=fir.Convert.create(operands=[recv_buffer_arg],
                     result_types=[fir.LLVMPointerType([recv_ptr_type])])
-    count_op, count_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[2], program_state)
-    get_mpi_dtype_op=mpi.GetDtypeOp.get(send_ptr_type) # Do this on the send buffer type
+    count_op, count_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[count_idx], program_state)
+    get_mpi_dtype_op=mpi.GetDtypeOp.get(recv_ptr_type) # Do this on the recv buffer type
 
-    mpi_op=str_to_mpi_operation[call_expr.args.blocks[0].ops[3].value.data]
+    mpi_op=str_to_mpi_operation[call_expr.args.blocks[0].ops[mpi_op_idx].value.data]
 
-    result_ops=count_op + [send_convert_buffer, recv_convert_buffer, get_mpi_dtype_op]
+    if has_send_buffer:
+      result_ops=count_op + [send_convert_buffer, recv_convert_buffer, get_mpi_dtype_op]
+      mpi_reduce_op=mpi.Allreduce.get(send_convert_buffer.results[0], recv_convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], mpi_op)
+    else:
+      result_ops=count_op + [recv_convert_buffer, get_mpi_dtype_op]
+      mpi_reduce_op=mpi.Allreduce.get(None, recv_convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], mpi_op)
 
-    mpi_reduce_op=mpi.Allreduce.get(send_convert_buffer.results[0], recv_convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], mpi_op)
     result_ops.append(mpi_reduce_op)
 
     return result_ops
