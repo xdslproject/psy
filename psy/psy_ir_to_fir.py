@@ -18,9 +18,10 @@ binary_arith_op_matching={"ADD": [arith.Addi, arith.Addf], "SUB":[arith.Subi, ar
 
 binary_arith_psy_to_arith_comparison_op={"EQ": "eq", "NE": "ne", "GT": "sgt", "LT": "slt", "GE": "sge", "LE": "sle"}
 
-str_to_mpi_operation={"max": mpi.MPI_MAX, "min": mpi.MPI_MIN, "sum": mpi.MPI_SUM, "prod": mpi.MPI_PROD, "land": mpi.MPI_LAND,
-  "band": mpi.MPI_BAND, "lor": mpi.MPI_LOR, "bor": mpi.MPI_BOR, "lxor": mpi.MPI_LXOR, "bxor": mpi.MPI_BXOR, "minloc": mpi.MPI_MINLOC,
-  "maxloc": mpi.MPI_MAXLOC, "replace": mpi.MPI_REPLACE, "no_op": mpi.MPI_NO_OP}
+str_to_mpi_operation={"max": mpi.MpiOp.MPI_MAX, "min": mpi.MpiOp.MPI_MIN, "sum": mpi.MpiOp.MPI_SUM, "prod": mpi.MpiOp.MPI_PROD, 
+  "land": mpi.MpiOp.MPI_LAND, "band": mpi.MpiOp.MPI_BAND, "lor": mpi.MpiOp.MPI_LOR, "bor": mpi.MpiOp.MPI_BOR, 
+  "lxor": mpi.MpiOp.MPI_LXOR, "bxor": mpi.MpiOp.MPI_BXOR, "minloc": mpi.MpiOp.MPI_MINLOC,
+  "maxloc": mpi.MpiOp.MPI_MAXLOC, "replace": mpi.MpiOp.MPI_REPLACE, "no_op": mpi.MpiOp.MPI_NO_OP}
 
 gpu_module=None
 
