@@ -4,8 +4,8 @@ from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerTyp
 from xdsl.dialects import func, arith, cf, mpi #, gpu
 from xdsl.dialects.experimental import math
 from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext, BlockArgument
-from psy.dialects import psy_ir, hstencil #, hpc_gpu
-#from xdsl.dialects.experimental import stencil
+from psy.dialects import psy_ir, psy_stencil #, hpc_gpu
+from xdsl.dialects.experimental import stencil
 from xdsl.dialects.llvm import LLVMPointerType
 from util.list_ops import flatten
 import uuid
@@ -18,8 +18,8 @@ binary_arith_op_matching={"ADD": [arith.Addi, arith.Addf], "SUB":[arith.Subi, ar
 
 binary_arith_psy_to_arith_comparison_op={"EQ": "eq", "NE": "ne", "GT": "sgt", "LT": "slt", "GE": "sge", "LE": "sle"}
 
-str_to_mpi_operation={"max": mpi.MpiOp.MPI_MAX, "min": mpi.MpiOp.MPI_MIN, "sum": mpi.MpiOp.MPI_SUM, "prod": mpi.MpiOp.MPI_PROD, 
-  "land": mpi.MpiOp.MPI_LAND, "band": mpi.MpiOp.MPI_BAND, "lor": mpi.MpiOp.MPI_LOR, "bor": mpi.MpiOp.MPI_BOR, 
+str_to_mpi_operation={"max": mpi.MpiOp.MPI_MAX, "min": mpi.MpiOp.MPI_MIN, "sum": mpi.MpiOp.MPI_SUM, "prod": mpi.MpiOp.MPI_PROD,
+  "land": mpi.MpiOp.MPI_LAND, "band": mpi.MpiOp.MPI_BAND, "lor": mpi.MpiOp.MPI_LOR, "bor": mpi.MpiOp.MPI_BOR,
   "lxor": mpi.MpiOp.MPI_LXOR, "bxor": mpi.MpiOp.MPI_BXOR, "minloc": mpi.MpiOp.MPI_MINLOC,
   "maxloc": mpi.MpiOp.MPI_MAXLOC, "replace": mpi.MpiOp.MPI_REPLACE, "no_op": mpi.MpiOp.MPI_NO_OP}
 
@@ -534,10 +534,10 @@ def try_translate_stmt(ctx: SSAValueCtx,
       return translate_return(ctx, op, program_state)
     #if isinstance(op, hpc_gpu.GPULoop):
     #  return translate_gpu_loop(ctx, op, program_state)
-    if isinstance(op, hstencil.HStencil_Stencil):
-      return translate_hstencil_stencil(ctx, op, program_state)
-    if isinstance(op, hstencil.HStencil_Result):
-      return translate_hstencil_result(ctx, op, program_state)
+    if isinstance(op, psy_stencil.PsyStencil_Stencil):
+      return translate_psy_stencil_stencil(ctx, op, program_state)
+    if isinstance(op, psy_stencil.PsyStencil_Result):
+      return translate_psy_stencil_result(ctx, op, program_state)
 
     res = None #try_translate_expr(ctx, op)
     if res is None:
@@ -557,14 +557,15 @@ def translate_stmt(ctx: SSAValueCtx, op: Operation, program_state : ProgramState
     else:
         return ops
 
-def translate_hstencil_access(ctx: SSAValueCtx, stencil_access: Operation, program_state : ProgramState) -> List[Operation]:
+def translate_psy_stencil_access(ctx: SSAValueCtx, stencil_access: Operation, program_state : ProgramState) -> List[Operation]:
   assert isinstance(stencil_access.var.type, psy_ir.ArrayType)
   el_type=try_translate_type(stencil_access.var.type.element_type)
   assert el_type is not None
-  access_op=stencil.Access.build(attributes={"offset": stencil_access.stencil_ops}, operands=[ctx[stencil_access.var.var_name.data]], result_types=[el_type])
+  offsets=([value.data for value in stencil_access.stencil_ops.data])
+  access_op=stencil.AccessOp.get(ctx[stencil_access.var.var_name.data], offsets)
   return [access_op], access_op.results[0]
 
-def translate_hstencil_result(ctx: SSAValueCtx, stencil_result: Operation, program_state : ProgramState) -> List[Operation]:
+def translate_psy_stencil_result(ctx: SSAValueCtx, stencil_result: Operation, program_state : ProgramState) -> List[Operation]:
   ops: List[Operation] = []
   for op in stencil_result.stencil_accesses.blocks[0].ops:
     stmt_ops, ssa = translate_expr(ctx, op, program_state)
@@ -575,18 +576,17 @@ def translate_hstencil_result(ctx: SSAValueCtx, stencil_result: Operation, progr
   assert el_type is not None
   rt=stencil.ResultType([el_type])
 
-  store_result_op=stencil.StoreResult.create(operands=[ops[-1].results[0]], result_types=[rt])
-  return_op=stencil.Return.create(operands=[store_result_op.results[0]])
+  store_result_op=stencil.StoreResultOp.create(operands=[ops[-1].results[0]], result_types=[rt])
+
+  return_op=stencil.ReturnOp.get(store_result_op.results[0])
   ops+=[store_result_op, return_op]
 
   block=Block()
   block.add_ops(ops)
-  body=Region()
-  body.add_block(block)
 
   array_sizes=get_array_sizes(stencil_result.var.type)
 
-  apply_op=stencil.Apply.create(operands=[ctx[stencil_result.var.var_name.data]], regions=[body], result_types=[stencil.TempType.from_shape(array_sizes)])
+  apply_op=stencil.ApplyOp.get([ctx[stencil_result.var.var_name.data]], block)
 
   return [apply_op]
 
@@ -598,14 +598,15 @@ def get_array_sizes(array_type):
     sizes.append((array_type.shape.data[i+1].value.data-array_type.shape.data[i].value.data)+1)
   return sizes
 
-def translate_hstencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, program_state : ProgramState) -> List[Operation]:
+def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, program_state : ProgramState) -> List[Operation]:
   ops: List[Operation] = []
   new_ctx=SSAValueCtx()
   for field in stencil_stmt.input_fields.data:
     assert isinstance(field.type, psy_ir.ArrayType)
     array_sizes=get_array_sizes(field.type)
-    external_load_op=stencil.External_Load.build(operands=[ctx[field.var_name.data]], result_types=[stencil.FieldType.from_shape(array_sizes)])
-    load_op=stencil.Load.build(operands=[external_load_op.results[0]], result_types=[stencil.TempType.from_shape(array_sizes)])
+    el_type=try_translate_type(field.type.element_type)
+    external_load_op=stencil.ExternalLoadOp.get(ctx[field.var_name.data], stencil.FieldType.from_shape(array_sizes, el_type))
+    load_op=stencil.LoadOp.get(external_load_op.results[0])
     ops+=[external_load_op, load_op]
     new_ctx[field.var_name.data]=load_op.results[0]
 
@@ -614,8 +615,10 @@ def translate_hstencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, progra
     ops += stmt_ops
 
   out_var=stencil_stmt.output_fields.data[0].var_name.data
-  store_op=stencil.Store.create(operands=[ops[-1].results[0], external_load_op.results[0]])
-  external_store_op=stencil.External_Store.create(operands=[external_load_op.results[0], ctx[out_var]])
+  # TODO - remove hard coding of these
+  index_location=stencil.IndexAttr.get(256, 256, 256)
+  store_op=stencil.StoreOp.get(ops[-1].results[0], external_load_op.results[0], index_location, index_location)
+  external_store_op=stencil.ExternalStoreOp.create(operands=[external_load_op.results[0], ctx[out_var]])
   ops+=[store_op, external_store_op]
 
   return ops
@@ -1293,8 +1296,8 @@ def try_translate_expr(
       return call_expr, call_expr[-1].results[0]
     if isinstance(op, psy_ir.ArrayReference):
       return translate_array_reference_expr(ctx, op, program_state)
-    if isinstance(op, hstencil.HStencil_Access):
-      return translate_hstencil_access(ctx, op, program_state)
+    if isinstance(op, psy_stencil.PsyStencil_Access):
+      return translate_psy_stencil_access(ctx, op, program_state)
 
     assert False, "Unknown Expression"
 
