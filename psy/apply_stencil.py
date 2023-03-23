@@ -5,7 +5,7 @@ from xdsl.pattern_rewriter import (GreedyRewritePatternApplier,
                                    PatternRewriter, PatternRewriteWalker,
                                    RewritePattern, op_type_rewrite_pattern)
 
-from psy.dialects import psy_ir, hstencil
+from psy.dialects import psy_ir, psy_stencil
 from util.visitor import Visitor
 from enum import Enum
 
@@ -102,14 +102,14 @@ class ReplaceAbsoluteArrayIndexWithStencil(RewritePattern):
       visitor=CollectArrayRelativeOffsets()
       visitor.traverse(accessor)
       if visitor.offset_val is None:
-        stencil_relative_offsets.append(IntAttr.from_int(0))
+        stencil_relative_offsets.append(IntAttr(0))
       else:
-        stencil_relative_offsets.append(IntAttr.from_int(visitor.offset_val))
+        stencil_relative_offsets.append(IntAttr(visitor.offset_val))
         
     parent=array_reference.parent
     idx = parent.ops.index(array_reference)
     array_reference.detach()
-    access_op=hstencil.HStencil_Access.build(attributes={"var": array_reference.var, "stencil_ops": ArrayAttr(stencil_relative_offsets)})
+    access_op=psy_stencil.PsyStencil_Access.build(attributes={"var": array_reference.var, "stencil_ops": ArrayAttr(stencil_relative_offsets)})
     rewriter.insert_op_at_pos(access_op, parent, idx)
 
 class ApplyStencilRewriter(RewritePattern):
@@ -159,9 +159,9 @@ class ApplyStencilRewriter(RewritePattern):
           walker = PatternRewriteWalker(GreedyRewritePatternApplier([replaceArrayIndexWithStencil]), apply_recursively=False)
           walker.rewrite_module(rhs)
 
-          stencil_result=hstencil.HStencil_Result.build(attributes={"var": loop_body.lhs.blocks[0].ops[0].var, "stencil_ops": ArrayAttr([])}, regions=[[rhs]])
+          stencil_result=psy_stencil.PsyStencil_Result.build(attributes={"var": loop_body.lhs.blocks[0].ops[0].var, "stencil_ops": ArrayAttr([])}, regions=[[rhs]])
 
-          stencil_op=hstencil.HStencil_Stencil.build(attributes={"input_fields": ArrayAttr(read_vars), "output_fields":ArrayAttr(write_vars)}, regions=[[stencil_result]])
+          stencil_op=psy_stencil.PsyStencil_Stencil.build(attributes={"input_fields": ArrayAttr(read_vars), "output_fields":ArrayAttr(write_vars)}, regions=[[stencil_result]])
           rewriter.insert_op_at_pos(stencil_op, parent, idx)
 
 
