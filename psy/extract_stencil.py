@@ -26,18 +26,26 @@ class _StencilExtractorRewriteBase(RewritePattern, ABC):
   def get_nested_type(self, in_type, search_type):
     if isinstance(in_type, search_type): return in_type
     return self.get_nested_type(in_type.type, search_type)
-    
+
   @staticmethod
   def wrap_stencil_in_func(name, input_types, operations):
     """
-    Wraps the extracted stencil operations for 
-    """    
+    Wraps the extracted stencil operations for
+    """
 
-    block = Block.from_arg_types(input_types)
+    input_types_translated=[]
+    for typ in input_types:
+      if isinstance(typ, fir.LLVMPointerType):
+        input_types_translated.append(llvm.LLVMPointerType.typed(typ.type))
+      else:
+        input_types_translated.append(typ)
+
+    block = Block.from_arg_types(input_types_translated)
     block.add_ops(operations)
     body=Region()
     body.add_block(block)
-    return func.FuncOp.from_region(name, input_types, [], body)
+
+    return func.FuncOp.from_region(name, input_types_translated, [], body)
 
 class ExtractStencilOps(_StencilExtractorRewriteBase):
     """
@@ -45,7 +53,7 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
     input array into fir.LLVMPointer type. Note currently this is very limited in terms of assuming
     one input only and a statically allocated array - it will get more complex as we add support
     for other things around this.
-    
+
     Note that the logic here is fairly simple, we assume all the stencil operations are between the external
     load and the external store. Hence we grab all of those as a chunk and move them out
     """
@@ -109,20 +117,20 @@ class AddExternalFuncDefs(RewritePattern):
 
 class ConnectExternalLoadToFunctionInput(RewritePattern):
   """
-  Connects external load at the start of the bridged function with the 
+  Connects external load at the start of the bridged function with the
   input argument (note we will need to load this into a memref here)
   """
   @op_type_rewrite_pattern
-  def match_and_rewrite(self, op: stencil.ExternalLoadOp, rewriter: PatternRewriter, /):  
+  def match_and_rewrite(self, op: stencil.ExternalLoadOp, rewriter: PatternRewriter, /):
     op.operands=[op.parent.args[0]]
-    
+
 class ConnectExternalStoreToFunctionInput(RewritePattern):
   """
   Connects the external store at the end of the bridged function with the
   input argument (note we will need to load this into a memref and then an llvm pointer)
   """
   @op_type_rewrite_pattern
-  def match_and_rewrite(self, op: stencil.ExternalStoreOp, rewriter: PatternRewriter, /):  
+  def match_and_rewrite(self, op: stencil.ExternalStoreOp, rewriter: PatternRewriter, /):
     op.operands=[op.temp, op.parent.args[0]]
 
 def extract_stencil(ctx: MLContext, module: builtin.ModuleOp):
@@ -137,10 +145,10 @@ def extract_stencil(ctx: MLContext, module: builtin.ModuleOp):
     # Now add in external function signature for new bridged functions
     bridged_fn_names=[v for v in extractStencil.bridgedFunctions.keys()]
     walker2 = PatternRewriteWalker(AddExternalFuncDefs(bridged_fn_names))
-    walker2.rewrite_module(module)    
+    walker2.rewrite_module(module)
 
     # Create a new module with all the stencil functions as part of it
-    bridged_functions=[v for v in extractStencil.bridgedFunctions.values()]        
+    bridged_functions=[v for v in extractStencil.bridgedFunctions.values()]
     new_module=builtin.ModuleOp.from_region_or_ops(bridged_functions)
 
     # Rewrite the stencil functions to hook up the function/block arguments
@@ -153,7 +161,7 @@ def extract_stencil(ctx: MLContext, module: builtin.ModuleOp):
     # Now we want to have two modules packaged together
     containing_mod=builtin.ModuleOp.from_region_or_ops([])
     module.regions[0].move_blocks(containing_mod.regions[0])
-    
+
     block = Block()
     block.add_ops([new_module, containing_mod])
     module.regions[0].add_block(block)
