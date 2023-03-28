@@ -610,6 +610,16 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
     ops+=[external_load_op, load_op]
     new_ctx[field.var_name.data]=load_op.results[0]
 
+  for field in stencil_stmt.output_fields.data:
+    if not field.var_name.data in new_ctx.dictionary.keys():
+      assert isinstance(field.type, psy_ir.ArrayType)
+      array_sizes=get_array_sizes(field.type)
+      el_type=try_translate_type(field.type.element_type)
+      external_load_op=stencil.ExternalLoadOp.get(ctx[field.var_name.data], stencil.FieldType.from_shape(array_sizes, el_type))
+      load_op=stencil.LoadOp.get(external_load_op.results[0])
+      ops+=[external_load_op, load_op]
+      new_ctx[field.var_name.data]=load_op.results[0]
+
   for op in stencil_stmt.body.blocks[0].ops:
     stmt_ops = translate_stmt(new_ctx, op, program_state)
     ops += stmt_ops
