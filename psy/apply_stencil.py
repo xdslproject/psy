@@ -13,6 +13,15 @@ class AccessMode(Enum):
     WRITE = 1
     READ = 2
 
+class LocateAssignment(Visitor):
+  def __init__(self, name):
+    self.name=name
+    self.assign=[]
+
+  def traverse_assign(self, assign:psy_ir.Assign):
+    if (assign.lhs.blocks[0].ops[0].var.var_name.data == self.name):
+      self.assign.append(assign)
+
 class CollectLoopsToReplace(Visitor):
   def __init__(self, indicies):
     self.applicable_indicies = {index: None for index in indicies}
@@ -45,6 +54,8 @@ class CollectApplicableVariables(Visitor):
     self.written_variables={}
     self.read_variables={}
     self.written_to_read={}
+    self.ordered_writes={}
+    self.write_index=0
     self.current_written_variable=None
     self.current_read_variables=[]
     self.currentMode=AccessMode.WRITE
@@ -83,7 +94,9 @@ class CollectApplicableVariables(Visitor):
     for op in assign.rhs.blocks[0].ops:
       self.traverse(op)
     assert self.current_written_variable is not None
-    self.written_to_read[self.current_written_variable]=set(self.current_read_variables)
+    self.written_to_read[self.write_index]=set(self.current_read_variables)
+    self.ordered_writes[self.write_index]=self.current_written_variable
+    self.write_index+=1
     self.current_written_variable=None
     self.current_read_variables=[]
 
@@ -139,23 +152,16 @@ class ApplyStencilRewriter(RewritePattern):
         if v is None: return False
       return True
 
-    def locate_assignment(self, ops, target_name):
-      for op in ops:
-        if isinstance(op, psy_ir.Assign):
-          if op.lhs.blocks[0].ops[0].var.var_name.data == target_name:
-            return op
-      return None
-
-    def handle_stencil_for_target(self, visitor, target_var_name, for_loop: psy_ir.Loop, rewriter: PatternRewriter):
+    def handle_stencil_for_target(self, visitor, index, target_var_name, for_loop: psy_ir.Loop, rewriter: PatternRewriter):
         read_vars=[]
         access_variables=[]
-        for read_var_name in visitor.written_to_read[target_var_name]:
+        for read_var_name in visitor.written_to_read[index]:
           read_var_v=visitor.read_variables[read_var_name]
           read_vars.append(read_var_v.var)
           if isinstance(read_var_v, psy_ir.ArrayReference):
-            for index in read_var_v.accessors.blocks[0].ops:
+            for idx in read_var_v.accessors.blocks[0].ops:
               v2=CollectArrayVariableIndexes()
-              v2.traverse(index)
+              v2.traverse(idx)
               access_variables.extend(v2.array_indexes)
 
         if len(access_variables) == 0: return None, None, None
@@ -165,7 +171,17 @@ class ApplyStencilRewriter(RewritePattern):
 
         if self.allIndexesFilled(v3.applicable_indicies):
           loop_body=v3.bottom_loop.body.blocks[0].ops
-          assign_op=self.locate_assignment(loop_body, target_var_name)
+
+          # Note there is a significant simplication here! We assume if there are multiple targets and these
+          # share a name, then they are all of the same name. As we use use the index directly, then a, a
+          # will work, but a, b, a will not
+          v=LocateAssignment(target_var_name)
+          v.traverse(for_loop)
+          assert len(v.assign) != 0
+          if len(v.assign) == 1:
+            assign_op=v.assign[0]
+          else:
+            assign_op=v.assign[index]
           assert assign_op is not None
 
           rhs=assign_op.rhs.blocks[0].ops[0]
@@ -191,8 +207,8 @@ class ApplyStencilRewriter(RewritePattern):
         visitor = CollectApplicableVariables()
         visitor.traverse(for_loop)
 
-        for written_var in visitor.written_to_read.keys():
-          top_loop, assignment_op, stencil_op=self.handle_stencil_for_target(visitor, written_var, for_loop, rewriter)
+        for index, written_var in visitor.ordered_writes.items():
+          top_loop, assignment_op, stencil_op=self.handle_stencil_for_target(visitor, index, written_var, for_loop, rewriter)
           if top_loop is not None and assignment_op is not None and stencil_op is not None:
             # Detach assignment op and then jam stencil into parent of top loop
             assignment_op.detach()
