@@ -62,21 +62,31 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
         parent_op=op.parent
         idx = parent_op.ops.index(op)
         stencil_ops=[]
+        ops_to_load_in=[]
         for i in range(idx, len(op.parent.ops)):
           stencil_ops.append(op.parent.ops[i])
+          if isinstance(op.parent.ops[i], stencil.ExternalLoadOp):
+            ops_to_load_in.append(op)
           if isinstance(op.parent.ops[i], stencil.ExternalStoreOp):
             break
-        nt=self.get_nested_type(op.field.typ, fir.ArrayType)
-        ptr_type=fir.LLVMPointerType([nt.type])
-        convert_array=fir.Convert.create(operands=[op.field],
-                    result_types=[ptr_type])
-        function_name="_InternalBridgeStencil_"+str(self.bridge_id)
 
-        call_stencil=fir.Call.create(attributes={"callee": builtin.SymbolRefAttr(function_name)}, operands=[convert_array.results[0]], result_types=[])
-        parent_op.insert_op([convert_array, call_stencil], idx+1)
+        pass_ops=[]
+        op_types=[]
+        for sop in ops_to_load_in:
+          nt=self.get_nested_type(sop.field.typ, fir.ArrayType)
+          ptr_type=fir.LLVMPointerType([nt.type])
+          op_types.append(ptr_type)
+          pass_ops.append(fir.Convert.create(operands=[sop.field],
+                      result_types=[ptr_type]))
+
+        function_name="_InternalBridgeStencil_"+str(self.bridge_id)
+        self.bridge_id+=1
+
+        call_stencil=fir.Call.create(attributes={"callee": builtin.SymbolRefAttr(function_name)}, operands=[el.results[0] for el in pass_ops], result_types=[])
+        parent_op.insert_op(pass_ops+[call_stencil], idx+1)
         for sop in stencil_ops:
           parent_op.detach_op(sop)
-        stencil_bridge_fn=_StencilExtractorRewriteBase.wrap_stencil_in_func(function_name, [ptr_type], stencil_ops)
+        stencil_bridge_fn=_StencilExtractorRewriteBase.wrap_stencil_in_func(function_name, op_types, stencil_ops)
         self.bridgedFunctions[function_name]=stencil_bridge_fn
 
 class AddExternalFuncDefs(RewritePattern):
@@ -116,12 +126,21 @@ class AddExternalFuncDefs(RewritePattern):
                                       len(module.body.blocks[0].ops))
 
 class ConnectExternalLoadToFunctionInput(RewritePattern):
+
+  def count_instances_preceeding(ops, to_index, typ):
+    instances=0
+    for idx, op in enumerate(ops):
+      if idx >= to_index: break
+      if isinstance(op, typ): instances+=1
+    return instances
+
   """
   Connects external load at the start of the bridged function with the
   input argument (note we will need to load this into a memref here)
   """
   @op_type_rewrite_pattern
   def match_and_rewrite(self, op: stencil.ExternalLoadOp, rewriter: PatternRewriter, /):
+    """
     idx = op.parent.ops.index(op)
     if idx != 0: return
     ptr_type=op.parent.args[0].typ
@@ -150,8 +169,10 @@ class ConnectExternalLoadToFunctionInput(RewritePattern):
 
     block=op.parent
     block.insert_op(ops_to_add, 0)
-
-    op.operands=[insert_stride_op.results[0]]
+"""
+    idx = op.parent.ops.index(op)
+    num_prev_external_loads=(ConnectExternalLoadToFunctionInput.count_instances_preceeding(op.parent.ops, idx-1, stencil.ExternalLoadOp))
+    op.operands=[op.parent.args[num_prev_external_loads]]
 
 class ConnectExternalStoreToFunctionInput(RewritePattern):
   """
@@ -160,7 +181,8 @@ class ConnectExternalStoreToFunctionInput(RewritePattern):
   """
   @op_type_rewrite_pattern
   def match_and_rewrite(self, op: stencil.ExternalStoreOp, rewriter: PatternRewriter, /):
-    op.operands=[op.temp, op.parent.args[0]]
+    # Look up the external load and then external store to that operand
+    op.operands=[op.temp, op.temp.op.field]
 
 def extract_stencil(ctx: MLContext, module: builtin.ModuleOp):
     # First extract the stencil aspects and replace with a function call
