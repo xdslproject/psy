@@ -174,9 +174,11 @@ class Import(Operation):
     specific_procedures: OpAttr[ArrayAttr]
 
     @staticmethod
-    def get(import_name: str,
+    def get(import_name: Union[str, StringAttr],
             specific_procedures: List[str],
             verify_op: bool = True) -> Container:
+      if isinstance(import_name, str):
+          import_name=StringAttr(import_name)
       res = Import.build(attributes={"import_name": import_name, "specific_procedures": ArrayAttr(specific_procedures)})
       if verify_op:
         res.verify(verify_nested_ops=False)
@@ -527,7 +529,8 @@ class Range(Operation):
             stop: List[Operation],
             step: List[Operation],
             verify_op: bool = True) -> CallExpr:
-        res = Range.build(regions=[start, stop, step])
+        res = Range.build(regions=[Region.from_operation_list(start), Region.from_operation_list(stop),
+                Region.from_operation_list(step)])
         if verify_op:
             # We don't verify nested operations since they might have already been verified
             res.verify(verify_nested_ops=False)
