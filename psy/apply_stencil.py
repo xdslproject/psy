@@ -40,10 +40,13 @@ class CollectArrayVariableIndexes(Visitor):
   def traverse_expr_name(self, id_expr: psy_ir.ExprName):
     self.array_indexes.append(id_expr.var.var_name.data)
 
-class CollectApplicabeVariables(Visitor):
+class CollectApplicableVariables(Visitor):
   def __init__(self):
     self.written_variables={}
     self.read_variables={}
+    self.written_to_read={}
+    self.current_written_variable=None
+    self.current_read_variables=[]
     self.currentMode=AccessMode.WRITE
 
   def traverse_binary_expr(self, binary_expr: psy_ir.BinaryOperation):
@@ -55,14 +58,18 @@ class CollectApplicabeVariables(Visitor):
   def traverse_array_reference(self, member_access_expr: psy_ir.ArrayReference):
     if self.currentMode == AccessMode.WRITE:
       self.written_variables[member_access_expr.var.var_name.data]=member_access_expr
+      self.current_written_variable=member_access_expr.var.var_name.data
     else:
       self.read_variables[member_access_expr.var.var_name.data]=member_access_expr
+      self.current_read_variables.append(member_access_expr.var.var_name.data)
 
   def traverse_expr_name(self, id_expr: psy_ir.ExprName):
     if self.currentMode == AccessMode.WRITE:
       self.written_variables[id_expr.var.var_name.data]=id_expr
+      self.current_written_variable=id_expr.var.var_name.data
     else:
       self.read_variables[id_expr.var.var_name.data]=id_expr
+      self.current_read_variables.append(id_expr.var.var_name.data)
 
   def traverse_loop(self, dl: psy_ir.Loop):
     for op in dl.body.blocks[0].ops:
@@ -75,22 +82,33 @@ class CollectApplicabeVariables(Visitor):
     self.currentMode=AccessMode.READ
     for op in assign.rhs.blocks[0].ops:
       self.traverse(op)
+    assert self.current_written_variable is not None
+    self.written_to_read[self.current_written_variable]=self.current_read_variables
+    self.current_written_variable=None
+    self.current_read_variables=[]
 
 class CollectArrayRelativeOffsets(Visitor):
   def __init__(self):
     self.offset_val=None
 
-  def traverse_binary_operation(self, binary_expr: psy_ir.BinaryOperation):    
+  def traverse_binary_operation(self, binary_expr: psy_ir.BinaryOperation):
     for op in binary_expr.lhs.blocks[0].ops:
       self.traverse(op)
     for op in binary_expr.rhs.blocks[0].ops:
       self.traverse(op)
 
-    if binary_expr.op.data == "SUB":       
+    if binary_expr.op.data == "SUB":
       self.offset_val=-self.offset_val
 
-  def traverse_literal(self, literal:psy_ir.Literal):    
+  def traverse_literal(self, literal:psy_ir.Literal):
     self.offset_val=literal.value.value.data
+
+class RemoveEmptyLoops(RewritePattern):
+  @op_type_rewrite_pattern
+  def match_and_rewrite(
+            self, for_loop: psy_ir.Loop, rewriter: PatternRewriter):
+      if len(for_loop.body.blocks[0].ops) == 0:
+        for_loop.detach()
 
 class ReplaceAbsoluteArrayIndexWithStencil(RewritePattern):
   @op_type_rewrite_pattern
@@ -105,7 +123,7 @@ class ReplaceAbsoluteArrayIndexWithStencil(RewritePattern):
         stencil_relative_offsets.append(IntAttr(0))
       else:
         stencil_relative_offsets.append(IntAttr(visitor.offset_val))
-        
+
     parent=array_reference.parent
     idx = parent.ops.index(array_reference)
     array_reference.detach()
@@ -121,48 +139,71 @@ class ApplyStencilRewriter(RewritePattern):
         if v is None: return False
       return True
 
-    @op_type_rewrite_pattern
-    def match_and_rewrite(
-            self, for_loop: psy_ir.Loop, rewriter: PatternRewriter):
+    def locate_assignment(self, ops, target_name):
+      for op in ops:
+        if isinstance(op, psy_ir.Assign):
+          if op.lhs.blocks[0].ops[0].var.var_name.data == target_name:
+            return op
+      return None
 
-        visitor = CollectApplicabeVariables()
-        visitor.traverse(for_loop)
-
+    def handle_stencil_for_target(self, visitor, target_var_name, for_loop: psy_ir.Loop, rewriter: PatternRewriter):
         read_vars=[]
         access_variables=[]
-        for read_var_k, read_var_v in visitor.read_variables.items():
+        for read_var_name in visitor.written_to_read[target_var_name]:
+          read_var_v=visitor.read_variables[read_var_name]
           read_vars.append(read_var_v.var)
-          for index in read_var_v.accessors.blocks[0].ops:
-            v2=CollectArrayVariableIndexes()
-            v2.traverse(index)
-            access_variables.extend(v2.array_indexes)
+          if isinstance(read_var_v, psy_ir.ArrayReference):
+            for index in read_var_v.accessors.blocks[0].ops:
+              v2=CollectArrayVariableIndexes()
+              v2.traverse(index)
+              access_variables.extend(v2.array_indexes)
 
-        write_vars=[]
-        for write_var_v in visitor.written_variables.values():
-          write_vars.append(write_var_v.var)
+        if len(access_variables) == 0: return None, None, None
 
         v3=CollectLoopsToReplace(access_variables)
         v3.traverse(for_loop)
 
         if self.allIndexesFilled(v3.applicable_indicies):
-          parent=v3.top_loop.parent
-          idx = parent.ops.index(v3.top_loop)
-          v3.top_loop.detach()
-          loop_body=v3.bottom_loop.body.blocks[0].ops[0]
-          v3.bottom_loop.body.blocks[0].ops[0].detach()
+          loop_body=v3.bottom_loop.body.blocks[0].ops
+          assign_op=self.locate_assignment(loop_body, target_var_name)
+          assert assign_op is not None
 
-          # For now assume the loop body is an assignment, can extend later on to be more flexible
-          rhs=loop_body.rhs.blocks[0].ops[0]
+          rhs=assign_op.rhs.blocks[0].ops[0]
           rhs.detach()
 
           replaceArrayIndexWithStencil=ReplaceAbsoluteArrayIndexWithStencil()
           walker = PatternRewriteWalker(GreedyRewritePatternApplier([replaceArrayIndexWithStencil]), apply_recursively=False)
           walker.rewrite_module(rhs)
 
-          stencil_result=psy_stencil.PsyStencil_Result.build(attributes={"var": loop_body.lhs.blocks[0].ops[0].var, "stencil_ops": ArrayAttr([])}, regions=[[rhs]])
+          write_var=visitor.written_variables[target_var_name].var
 
-          stencil_op=psy_stencil.PsyStencil_Stencil.build(attributes={"input_fields": ArrayAttr(read_vars), "output_fields":ArrayAttr(write_vars)}, regions=[[stencil_result]])
-          rewriter.insert_op_at_pos(stencil_op, parent, idx)
+          stencil_result=psy_stencil.PsyStencil_Result.build(attributes={"var": assign_op.lhs.blocks[0].ops[0].var, "stencil_ops": ArrayAttr([])}, regions=[[rhs]])
+          stencil_op=psy_stencil.PsyStencil_Stencil.build(attributes={"input_fields": ArrayAttr(read_vars), "output_fields":ArrayAttr([write_var])}, regions=[[stencil_result]])
+          return v3.top_loop, assign_op, stencil_op
+        else:
+          return None, None, None
+
+
+    @op_type_rewrite_pattern
+    def match_and_rewrite(
+            self, for_loop: psy_ir.Loop, rewriter: PatternRewriter):
+
+        visitor = CollectApplicableVariables()
+        visitor.traverse(for_loop)
+
+        for written_var in visitor.written_to_read.keys():
+          top_loop, assignment_op, stencil_op=self.handle_stencil_for_target(visitor, written_var, for_loop, rewriter)
+          if top_loop is not None and assignment_op is not None and stencil_op is not None:
+            # Detach assignment op and then jam stencil into parent of top loop
+            assignment_op.detach()
+            top_loop.parent.add_op(stencil_op)
+          else:
+            # If one is none, ensure all are
+            assert top_loop is None and assignment_op is None and stencil_op is None
+
+        # Now go through and remove any subloops that are empty
+        walker = PatternRewriteWalker(GreedyRewritePatternApplier([RemoveEmptyLoops()]), walk_regions_first=True)
+        walker.rewrite_module(for_loop)
 
 
 def apply_stencil_analysis(ctx: psy_ir.MLContext, module: ModuleOp) -> ModuleOp:
