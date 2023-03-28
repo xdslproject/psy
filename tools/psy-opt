@@ -11,11 +11,14 @@ from psy.psy_ftn_printer import print_fortran
 from xdsl.transforms.lower_mpi import lower_mpi
 from psy.psy_ir_to_fir import psy_ir_to_fir
 #from psy.apply_gpu import apply_gpu_analysis
-#from psy.apply_stencil import apply_stencil_analysis
+from psy.apply_stencil import apply_stencil_analysis
+from psy.extract_stencil import extract_stencil
+from psy.rewrite_fir_to_standard import rewrite_fir_to_standard
 
 from psy.dialects.psy_ir import psyIR
-#from psy.dialects.hstencil import HStencil
-#from xdsl.dialects.experimental.stencil import Stencil
+from psy.dialects.psy_stencil import Psy_Stencil
+from xdsl.dialects.experimental.stencil import Stencil
+from xdsl.transforms.experimental.ConvertStencilToLLMLIR import ConvertStencilToGPU
 from ftn.dialects.fir import Fir
 from util.semantic_error import SemanticError
 
@@ -27,7 +30,11 @@ class PsyOptMain(xDSLOptMain):
 
     passes_native = [       
       psy_ir_to_fir,
-      lower_mpi
+      lower_mpi,
+      extract_stencil,
+      apply_stencil_analysis,
+      rewrite_fir_to_standard
+#      ConvertStencilToGPU
 #      apply_gpu_analysis,
 #      apply_stencil_analysis
     ]
@@ -51,6 +58,7 @@ class PsyOptMain(xDSLOptMain):
         """Register all dialects that can be used."""        
         psy_ir = psyIR(self.ctx)        
         ftn_fir = Fir(self.ctx) 
+        psy_stencil = Psy_Stencil(self.ctx) 
         #hstencil = HStencil(self.ctx)
         #stencil = Stencil(self.ctx)
 
