@@ -10,7 +10,7 @@ from xdsl.pattern_rewriter import (RewritePattern, PatternRewriter,
                                    op_type_rewrite_pattern,
                                    PatternRewriteWalker,
                                    GreedyRewritePatternApplier)
-from xdsl.dialects import builtin, func, llvm
+from xdsl.dialects import builtin, func, llvm, arith
 from xdsl.dialects.experimental import stencil
 
 
@@ -122,7 +122,36 @@ class ConnectExternalLoadToFunctionInput(RewritePattern):
   """
   @op_type_rewrite_pattern
   def match_and_rewrite(self, op: stencil.ExternalLoadOp, rewriter: PatternRewriter, /):
-    op.operands=[op.parent.args[0]]
+    idx = op.parent.ops.index(op)
+    if idx != 0: return
+    ptr_type=op.parent.args[0].typ
+    array_typ=llvm.LLVMArrayType.from_type_and_size(builtin.i64, builtin.IntAttr(1))
+    struct_type=llvm.LLVMStructType.from_type_list([ptr_type, ptr_type, builtin.i64, array_typ, array_typ])
+
+    undef_memref_struct=llvm.LLVMMLIRUndef.create(result_types=[struct_type])
+    insert_alloc_ptr_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i32, [0])},
+      operands=[undef_memref_struct.results[0], op.parent.args[0]], result_types=[struct_type])
+    insert_aligned_ptr_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i32, [1])},
+      operands=[insert_alloc_ptr_op.results[0], op.parent.args[0]], result_types=[struct_type])
+
+    offset_op=arith.Constant.from_int_and_width(0, 32)
+    insert_offset_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i32, [2])},
+      operands=[insert_aligned_ptr_op.results[0], offset_op.results[0]], result_types=[struct_type])
+
+    size_op=arith.Constant.from_int_and_width(10, 32)
+    insert_size_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i32, [3])},
+      operands=[insert_offset_op.results[0], size_op.results[0]], result_types=[struct_type])
+
+    stride_op=arith.Constant.from_int_and_width(1, 32)
+    insert_stride_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i32, [4])},
+      operands=[insert_size_op.results[0], stride_op.results[0]], result_types=[struct_type])
+
+    ops_to_add=[undef_memref_struct, insert_alloc_ptr_op, insert_aligned_ptr_op, offset_op, insert_offset_op, size_op, insert_size_op, stride_op, insert_stride_op]
+
+    block=op.parent
+    block.insert_op(ops_to_add, 0)
+
+    op.operands=[insert_stride_op.results[0]]
 
 class ConnectExternalStoreToFunctionInput(RewritePattern):
   """
@@ -155,7 +184,7 @@ def extract_stencil(ctx: MLContext, module: builtin.ModuleOp):
     walker3 = PatternRewriteWalker(GreedyRewritePatternApplier([
               ConnectExternalLoadToFunctionInput(),
               ConnectExternalStoreToFunctionInput()
-    ]))
+    ]), apply_recursively=False)
     walker3.rewrite_module(new_module)
 
     # Now we want to have two modules packaged together

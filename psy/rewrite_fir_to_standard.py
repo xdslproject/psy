@@ -34,6 +34,7 @@ class RewriteFirConvert(RewritePattern):
       new_conv=arith.TruncFOp.get(op.value, out_type)
       rewriter.replace_matched_op(new_conv)
 
+
 def rewrite_fir_to_standard(ctx: MLContext, module: builtin.ModuleOp):
     walker = PatternRewriteWalker(GreedyRewritePatternApplier([
               RewriteFirConvert(),
