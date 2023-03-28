@@ -83,7 +83,7 @@ class CollectApplicableVariables(Visitor):
     for op in assign.rhs.blocks[0].ops:
       self.traverse(op)
     assert self.current_written_variable is not None
-    self.written_to_read[self.current_written_variable]=self.current_read_variables
+    self.written_to_read[self.current_written_variable]=set(self.current_read_variables)
     self.current_written_variable=None
     self.current_read_variables=[]
 
