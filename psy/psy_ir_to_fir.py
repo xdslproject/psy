@@ -625,8 +625,7 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
     ops += stmt_ops
 
   out_var=stencil_stmt.output_fields.data[0].var_name.data
-  # TODO - remove hard coding of these
-  index_location=stencil.IndexAttr.get(256, 256, 256)
+  index_location=stencil.IndexAttr.get(*array_sizes)
   store_op=stencil.StoreOp.get(ops[-1].results[0], external_load_op.results[0], index_location, index_location)
   external_store_op=stencil.ExternalStoreOp.create(operands=[external_load_op.results[0], ctx[out_var]])
   ops+=[store_op, external_store_op]
