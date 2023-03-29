@@ -42,6 +42,7 @@ class _StencilExtractorRewriteBase(RewritePattern, ABC):
 
     block = Block.from_arg_types(input_types_translated)
     block.add_ops(operations)
+    block.add_op(func.Return.get())
     body=Region()
     body.add_block(block)
 
@@ -134,45 +135,90 @@ class ConnectExternalLoadToFunctionInput(RewritePattern):
       if isinstance(op, typ): instances+=1
     return instances
 
+  def get_nested_type(in_type, search_type):
+    if isinstance(in_type, search_type): return in_type
+    return ConnectExternalLoadToFunctionInput.get_nested_type(in_type.type, search_type)
+
+  def get_array_dimension_size(array_type, dim):
+    # We need to access shape of array type in reverse order, as indexing
+    # is different between C and Fortran
+    shape=array_type.shape.data
+    access_dim=len(shape) - dim - 1
+    return shape[access_dim].value.data
+
+  def get_array_dimension_stride(array_type, dim):
+    # We need to work back in reverse order, as indexing
+    # is different between C and Fortran
+    shape=array_type.shape.data
+    access_dim=len(shape) - dim - 1
+    stride=0
+    for i in range(access_dim):
+      if stride == 0: stride=1
+      stride*=shape[i].value.data
+    return stride
+
+  def get_c_style_array_shape(array_type):
+    shape=array_type.shape.data
+    c_style=[]
+    for i in range(len(shape)):
+      c_style.insert(0, shape[i])
+    return c_style
+
   """
   Connects external load at the start of the bridged function with the
   input argument (note we will need to load this into a memref here)
   """
   @op_type_rewrite_pattern
   def match_and_rewrite(self, op: stencil.ExternalLoadOp, rewriter: PatternRewriter, /):
-    """
+    # If this already accepts a memref then don't need to wrap pointer
+    if isinstance(op.field.typ, MemRefType): return
+
+    array_type=ConnectExternalLoadToFunctionInput.get_nested_type(op.field.typ, fir.ArrayType)
+    number_dims=len(array_type.shape.data)
+
     idx = op.parent.ops.index(op)
-    if idx != 0: return
-    ptr_type=op.parent.args[0].typ
-    array_typ=llvm.LLVMArrayType.from_type_and_size(builtin.i64, builtin.IntAttr(1))
+    num_prev_external_loads=(ConnectExternalLoadToFunctionInput.count_instances_preceeding(op.parent.ops, idx-1, stencil.ExternalLoadOp))
+
+    ptr_type=op.parent.args[num_prev_external_loads].typ
+    array_typ=llvm.LLVMArrayType.from_type_and_size(builtin.i64, builtin.IntAttr(number_dims))
     struct_type=llvm.LLVMStructType.from_type_list([ptr_type, ptr_type, builtin.i64, array_typ, array_typ])
 
     undef_memref_struct=llvm.LLVMMLIRUndef.create(result_types=[struct_type])
-    insert_alloc_ptr_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i32, [0])},
-      operands=[undef_memref_struct.results[0], op.parent.args[0]], result_types=[struct_type])
-    insert_aligned_ptr_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i32, [1])},
-      operands=[insert_alloc_ptr_op.results[0], op.parent.args[0]], result_types=[struct_type])
+    insert_alloc_ptr_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i64, [0])},
+      operands=[undef_memref_struct.results[0], op.parent.args[num_prev_external_loads]], result_types=[struct_type])
+    insert_aligned_ptr_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i64, [1])},
+      operands=[insert_alloc_ptr_op.results[0], op.parent.args[num_prev_external_loads]], result_types=[struct_type])
 
-    offset_op=arith.Constant.from_int_and_width(0, 32)
-    insert_offset_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i32, [2])},
+    offset_op=arith.Constant.from_int_and_width(0, 64)
+    insert_offset_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i64, [2])},
       operands=[insert_aligned_ptr_op.results[0], offset_op.results[0]], result_types=[struct_type])
 
-    size_op=arith.Constant.from_int_and_width(10, 32)
-    insert_size_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i32, [3])},
-      operands=[insert_offset_op.results[0], size_op.results[0]], result_types=[struct_type])
+    ops_to_add=[undef_memref_struct, insert_alloc_ptr_op, insert_aligned_ptr_op, offset_op, insert_offset_op]
 
-    stride_op=arith.Constant.from_int_and_width(1, 32)
-    insert_stride_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i32, [4])},
-      operands=[insert_size_op.results[0], stride_op.results[0]], result_types=[struct_type])
+    for dim in range(number_dims):
+      dim_size=ConnectExternalLoadToFunctionInput.get_array_dimension_size(array_type, dim)
+      size_op=arith.Constant.from_int_and_width(dim_size, 64)
+      insert_size_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i64, [3, dim])},
+        operands=[ops_to_add[-1].results[0], size_op.results[0]], result_types=[struct_type])
 
-    ops_to_add=[undef_memref_struct, insert_alloc_ptr_op, insert_aligned_ptr_op, offset_op, insert_offset_op, size_op, insert_size_op, stride_op, insert_stride_op]
+      dim_stride=ConnectExternalLoadToFunctionInput.get_array_dimension_stride(array_type, dim)
+      stride_op=arith.Constant.from_int_and_width(dim_stride, 64)
+      insert_stride_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i64, [4, dim])},
+        operands=[insert_size_op.results[0], stride_op.results[0]], result_types=[struct_type])
+
+      ops_to_add+=[size_op, insert_size_op, stride_op, insert_stride_op]
+
+
+    target_memref_type=MemRefType.from_element_type_and_shape(ptr_type.type, ConnectExternalLoadToFunctionInput.get_c_style_array_shape(array_type))
+
+    unrealised_conv_cast_op=builtin.UnrealizedConversionCastOp.create(operands=[insert_stride_op.results[0]], result_types=[target_memref_type])
+    ops_to_add.append(unrealised_conv_cast_op)
+
 
     block=op.parent
-    block.insert_op(ops_to_add, 0)
-"""
-    idx = op.parent.ops.index(op)
-    num_prev_external_loads=(ConnectExternalLoadToFunctionInput.count_instances_preceeding(op.parent.ops, idx-1, stencil.ExternalLoadOp))
-    op.operands=[op.parent.args[num_prev_external_loads]]
+    block.insert_op(ops_to_add, idx)
+
+    op.operands=[unrealised_conv_cast_op.results[0]]
 
 class ConnectExternalStoreToFunctionInput(RewritePattern):
   """
