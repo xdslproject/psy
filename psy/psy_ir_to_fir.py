@@ -566,9 +566,16 @@ def translate_psy_stencil_access(ctx: SSAValueCtx, stencil_access: Operation, pr
   return [access_op], access_op.results[0]
 
 def translate_psy_stencil_result(ctx: SSAValueCtx, stencil_result: Operation, program_state : ProgramState) -> List[Operation]:
+  input_types=[ctx[stencil_result.var.var_name.data].typ]
+  c = SSAValueCtx(dictionary=dict(), #zip(param_names, block.args)),
+                    parent_scope=ctx)
+  block = Block.from_arg_types(input_types)
+
+  c[stencil_result.var.var_name.data]=block.args[0]
+
   ops: List[Operation] = []
   for op in stencil_result.stencil_accesses.blocks[0].ops:
-    stmt_ops, ssa = translate_expr(ctx, op, program_state)
+    stmt_ops, ssa = translate_expr(c, op, program_state)
     ops += stmt_ops
 
   assert isinstance(stencil_result.var.type, psy_ir.ArrayType)
@@ -576,17 +583,15 @@ def translate_psy_stencil_result(ctx: SSAValueCtx, stencil_result: Operation, pr
   assert el_type is not None
   rt=stencil.ResultType([el_type])
 
-  store_result_op=stencil.StoreResultOp.create(operands=[ops[-1].results[0]], result_types=[rt])
+  return_op=stencil.ReturnOp.get(ops[-1].results[0])
+  ops+=[return_op]
 
-  return_op=stencil.ReturnOp.get(store_result_op.results[0])
-  ops+=[store_result_op, return_op]
-
-  block=Block()
   block.add_ops(ops)
 
   array_sizes=get_array_sizes(stencil_result.var.type)
-
-  apply_op=stencil.ApplyOp.get([ctx[stencil_result.var.var_name.data]], block)
+  lb=stencil.IndexAttr.get(*([0]*len(array_sizes)))
+  ub=stencil.IndexAttr.get(*array_sizes)
+  apply_op=stencil.ApplyOp.get([ctx[stencil_result.var.var_name.data]], block, lb, ub)
 
   return [apply_op]
 
@@ -601,14 +606,21 @@ def get_array_sizes(array_type):
 def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, program_state : ProgramState) -> List[Operation]:
   ops: List[Operation] = []
   new_ctx=SSAValueCtx()
+  input_cast_ops={}
   for field in stencil_stmt.input_fields.data:
     assert isinstance(field.type, psy_ir.ArrayType)
     array_sizes=get_array_sizes(field.type)
     el_type=try_translate_type(field.type.element_type)
     external_load_op=stencil.ExternalLoadOp.get(ctx[field.var_name.data], stencil.FieldType.from_shape(array_sizes, el_type))
-    load_op=stencil.LoadOp.get(external_load_op.results[0])
-    ops+=[external_load_op, load_op]
+    lb=stencil.IndexAttr.get(-1,-1)
+    ub=stencil.IndexAttr.get(*array_sizes)
+    cast_op=stencil.CastOp.get(external_load_op.results[0], lb, ub, external_load_op.results[0].typ)
+    input_cast_ops[field.var_name.data]=cast_op
+    load_op=stencil.LoadOp.get(cast_op.results[0])
+    ops+=[external_load_op, cast_op, load_op]
     new_ctx[field.var_name.data]=load_op.results[0]
+
+  output_field_cast_op=None
 
   for field in stencil_stmt.output_fields.data:
     if not field.var_name.data in new_ctx.dictionary.keys():
@@ -616,9 +628,14 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
       array_sizes=get_array_sizes(field.type)
       el_type=try_translate_type(field.type.element_type)
       external_load_op=stencil.ExternalLoadOp.get(ctx[field.var_name.data], stencil.FieldType.from_shape(array_sizes, el_type))
-      load_op=stencil.LoadOp.get(external_load_op.results[0])
-      ops+=[external_load_op, load_op]
+      lb=stencil.IndexAttr.get(-1,-1)
+      ub=stencil.IndexAttr.get(*array_sizes)
+      output_field_cast_op=stencil.CastOp.get(external_load_op.results[0], lb, ub, external_load_op.results[0].typ)
+      load_op=stencil.LoadOp.get(output_field_cast_op.results[0])
+      ops+=[external_load_op, output_field_cast_op, load_op]
       new_ctx[field.var_name.data]=load_op.results[0]
+    else:
+      output_field_cast_op=input_cast_ops[field.var_name.data]
 
   for op in stencil_stmt.body.blocks[0].ops:
     stmt_ops = translate_stmt(new_ctx, op, program_state)
@@ -626,7 +643,7 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
 
   out_var=stencil_stmt.output_fields.data[0].var_name.data
   index_location=stencil.IndexAttr.get(*array_sizes)
-  store_op=stencil.StoreOp.get(ops[-1].results[0], external_load_op.results[0], index_location, index_location)
+  store_op=stencil.StoreOp.get(ops[-1].results[0], output_field_cast_op.results[0], index_location, index_location)
   external_store_op=stencil.ExternalStoreOp.create(operands=[external_load_op.results[0], ctx[out_var]])
   ops+=[store_op, external_store_op]
 
