@@ -161,7 +161,7 @@ class ConnectExternalLoadToFunctionInput(RewritePattern):
     shape=array_type.shape.data
     c_style=[]
     for i in range(len(shape)):
-      c_style.insert(0, shape[i])
+      c_style.insert(0, builtin.IntegerAttr.from_index_int_value(shape[i].value.data))
     return c_style
 
   """
