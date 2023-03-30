@@ -118,6 +118,17 @@ class CollectApplicableVariables(Visitor):
     self.current_written_variable=None
     self.current_read_variables=[]
 
+class DetermineMinMaxRelativeOffsetsAcrossStencilAccesses(Visitor):
+  def __init__(self, index):
+    self.min=None
+    self.max=None
+    self.index=index
+
+  def traverse_psy_stencil__access(self, stencil_access: psy_stencil.PsyStencil_Access):
+    val=stencil_access.stencil_ops.data[self.index].data
+    if self.min is None or self.min > val: self.min=val
+    if self.max is None or self.max < val: self.max=val
+
 class CollectArrayRelativeOffsets(Visitor):
   def __init__(self):
     self.offset_val=None
@@ -237,14 +248,28 @@ class ApplyStencilRewriter(RewritePattern):
           walker = PatternRewriteWalker(GreedyRewritePatternApplier([replaceArrayIndexWithStencil]), apply_recursively=False)
           walker.rewrite_module(rhs)
 
+          min_indicies=[]
+          max_indicies=[]
+          for i in range(len(index_variable_names)):
+            offset_indexes=DetermineMinMaxRelativeOffsetsAcrossStencilAccesses(i)
+            offset_indexes.traverse(rhs)
+            min_indicies.append(IntAttr(offset_indexes.min))
+            max_indicies.append(IntAttr(offset_indexes.max))
+
           # Grab the lower and upper bounds for the stencil application
           lb=ApplyStencilRewriter.build_bounds(index_variable_names, loop_numeric_bounds, 0)
           ub=ApplyStencilRewriter.build_bounds(index_variable_names, loop_numeric_bounds, 1)
 
+          assert len(min_indicies) == len(lb)
+          assert len(max_indicies) == len(ub)
+          assert len(lb) == len(ub)
+          assert len(min_indicies) == len(max_indicies)
+
           write_var=visitor.written_variables[target_var_name].var
 
           stencil_result=psy_stencil.PsyStencil_Result.build(attributes={"var": assign_op.lhs.blocks[0].ops[0].var,
-              "stencil_ops": ArrayAttr([]), "from_bounds": ArrayAttr(lb), "to_bounds": ArrayAttr(ub)}, regions=[[rhs]])
+              "stencil_ops": ArrayAttr([]), "from_bounds": ArrayAttr(lb), "to_bounds": ArrayAttr(ub),
+              "min_relative_offset": ArrayAttr(min_indicies), "max_relative_offset": ArrayAttr(max_indicies)}, regions=[[rhs]])
           stencil_op=psy_stencil.PsyStencil_Stencil.build(attributes={"input_fields": ArrayAttr(read_vars), "output_fields":ArrayAttr([write_var])}, regions=[[stencil_result]])
           return v3.top_loop, assign_op, stencil_op
         else:

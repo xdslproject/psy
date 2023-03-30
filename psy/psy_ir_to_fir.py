@@ -615,10 +615,10 @@ def get_array_sizes(array_type):
     sizes.append((array_type.shape.data[i+1].value.data-array_type.shape.data[i].value.data)+1)
   return sizes
 
-def get_stencil_data_range(bounds_array, val):
+def get_stencil_data_range(bounds_array, relative_offset, further_offset=0):
   range_vals=[]
-  for d in bounds_array:
-    range_vals.append(d.data + val)
+  for rel_offset, d in zip(relative_offset, bounds_array):
+    range_vals.append(d.data + rel_offset.data + further_offset)
   return stencil.IndexAttr.get(*range_vals)
 
 
@@ -630,8 +630,11 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
   # Build the lower and upper bounds up - note how we are picking off the first stencil
   # result here, we assume currently only one per stencil - need to enhance when we
   # support multiple ones
-  lb=get_stencil_data_range(stencil_stmt.body.blocks[0].ops[0].from_bounds.data, -2)
-  ub=get_stencil_data_range(stencil_stmt.body.blocks[0].ops[0].to_bounds.data, 1)
+  stencil_result_op=stencil_stmt.body.blocks[0].ops[0]
+  # -1 further offset for lb as Fortran array is 1 indexed, whereas C is 0 - so need to apply that here too
+  lb=get_stencil_data_range(stencil_result_op.from_bounds.data, stencil_result_op.min_relative_offset.data, -1)
+  # No need for a further offset as loop in C is less than, rather than less than equals in Fortran so all good!
+  ub=get_stencil_data_range(stencil_result_op.to_bounds.data, stencil_result_op.max_relative_offset.data)
 
   for field in stencil_stmt.input_fields.data:
     assert isinstance(field.type, psy_ir.ArrayType)
