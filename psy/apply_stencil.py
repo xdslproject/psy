@@ -13,6 +13,13 @@ class AccessMode(Enum):
     WRITE = 1
     READ = 2
 
+class GetConstantValue(Visitor):
+  def __init__(self):
+    self.literal=None
+
+  def traverse_literal(self, literal: psy_ir.Literal):
+    self.literal=literal.value.value.data
+
 class LocateAssignment(Visitor):
   def __init__(self, name):
     self.name=name
@@ -21,6 +28,17 @@ class LocateAssignment(Visitor):
   def traverse_assign(self, assign:psy_ir.Assign):
     if (assign.lhs.blocks[0].ops[0].var.var_name.data == self.name):
       self.assign.append(assign)
+
+class CollectLoopsWithVariableName(Visitor):
+  def __init__(self, indicies):
+    self.applicable_indicies = {index: None for index in indicies}
+    self.located_loops={}
+
+  def traverse_loop(self, dl: psy_ir.Loop):
+    if (dl.variable.var_name.data in self.applicable_indicies):
+      self.located_loops[dl.variable.var_name.data]=dl
+    for op in dl.body.blocks[0].ops:
+      self.traverse(op)
 
 class CollectLoopsToReplace(Visitor):
   def __init__(self, indicies):
@@ -152,6 +170,12 @@ class ApplyStencilRewriter(RewritePattern):
         if v is None: return False
       return True
 
+    def build_bounds(index_variable_names, constants_dir, index):
+      bounds=[]
+      for var_name in index_variable_names:
+        bounds.append(IntAttr(constants_dir[var_name][index]))
+      return bounds
+
     def handle_stencil_for_target(self, visitor, index, target_var_name, for_loop: psy_ir.Loop, rewriter: PatternRewriter):
         read_vars=[]
         access_variables=[]
@@ -165,6 +189,28 @@ class ApplyStencilRewriter(RewritePattern):
               access_variables.extend(v2.array_indexes)
 
         if len(access_variables) == 0: return None, None, None
+
+        written_var=visitor.written_variables[target_var_name]
+        # Needs to be an array that we are writing into
+        assert isinstance(written_var, psy_ir.ArrayReference)
+        index_variable_names=[]
+        for idx in written_var.accessors.blocks[0].ops:
+          v2=CollectArrayVariableIndexes()
+          v2.traverse(idx)
+          index_variable_names.extend(v2.array_indexes)
+
+        # Now we collect the literal range (lb, ub) that each written to index is operating over
+        loop_var_name=CollectLoopsWithVariableName(index_variable_names)
+        loop_var_name.traverse(for_loop)
+        loop_numeric_bounds={}
+        for key, value in loop_var_name.located_loops.items():
+            from_bound=GetConstantValue()
+            from_bound.traverse(value.start.blocks[0].ops[0])
+
+            to_bound=GetConstantValue()
+            to_bound.traverse(value.stop.blocks[0].ops[0])
+
+            loop_numeric_bounds[key]=[from_bound.literal, to_bound.literal]
 
         v3=CollectLoopsToReplace(access_variables)
         v3.traverse(for_loop)
@@ -191,9 +237,14 @@ class ApplyStencilRewriter(RewritePattern):
           walker = PatternRewriteWalker(GreedyRewritePatternApplier([replaceArrayIndexWithStencil]), apply_recursively=False)
           walker.rewrite_module(rhs)
 
+          # Grab the lower and upper bounds for the stencil application
+          lb=ApplyStencilRewriter.build_bounds(index_variable_names, loop_numeric_bounds, 0)
+          ub=ApplyStencilRewriter.build_bounds(index_variable_names, loop_numeric_bounds, 1)
+
           write_var=visitor.written_variables[target_var_name].var
 
-          stencil_result=psy_stencil.PsyStencil_Result.build(attributes={"var": assign_op.lhs.blocks[0].ops[0].var, "stencil_ops": ArrayAttr([])}, regions=[[rhs]])
+          stencil_result=psy_stencil.PsyStencil_Result.build(attributes={"var": assign_op.lhs.blocks[0].ops[0].var,
+              "stencil_ops": ArrayAttr([]), "from_bounds": ArrayAttr(lb), "to_bounds": ArrayAttr(ub)}, regions=[[rhs]])
           stencil_op=psy_stencil.PsyStencil_Stencil.build(attributes={"input_fields": ArrayAttr(read_vars), "output_fields":ArrayAttr([write_var])}, regions=[[stencil_result]])
           return v3.top_loop, assign_op, stencil_op
         else:

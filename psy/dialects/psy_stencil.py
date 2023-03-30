@@ -36,6 +36,8 @@ class PsyStencil_Access(Operation):
 class PsyStencil_Result(Operation):
     name: str = "psy.stencil.result"
 
+    from_bounds: OpAttr[ArrayAttr]
+    to_bounds: OpAttr[ArrayAttr]
     var: OpAttr[AnyAttr()]
     stencil_ops: OpAttr[ArrayAttr]
     stencil_accesses: SingleBlockRegion
