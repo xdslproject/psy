@@ -589,8 +589,20 @@ def translate_psy_stencil_result(ctx: SSAValueCtx, stencil_result: Operation, pr
   block.add_ops(ops)
 
   array_sizes=get_array_sizes(stencil_result.var.type)
-  lb=stencil.IndexAttr.get(*([0]*len(array_sizes)))
-  ub=stencil.IndexAttr.get(*array_sizes)
+  assert len(array_sizes) == len(stencil_result.from_bounds.data)
+  assert len(array_sizes) == len(stencil_result.to_bounds.data)
+
+  lb_ints=[]
+  for el in stencil_result.from_bounds.data:
+    # We minus one as going from Fortran indexing to C style
+    lb_ints.append(el.data-1)
+
+  ub_ints=[]
+  for el in stencil_result.to_bounds.data:
+    ub_ints.append(el.data)
+
+  lb=stencil.IndexAttr.get(*lb_ints)
+  ub=stencil.IndexAttr.get(*ub_ints)
   apply_op=stencil.ApplyOp.get([ctx[stencil_result.var.var_name.data]], block, lb, ub)
 
   return [apply_op]
@@ -603,17 +615,29 @@ def get_array_sizes(array_type):
     sizes.append((array_type.shape.data[i+1].value.data-array_type.shape.data[i].value.data)+1)
   return sizes
 
+def get_stencil_data_range(bounds_array, val):
+  range_vals=[]
+  for d in bounds_array:
+    range_vals.append(d.data + val)
+  return stencil.IndexAttr.get(*range_vals)
+
+
 def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, program_state : ProgramState) -> List[Operation]:
   ops: List[Operation] = []
   new_ctx=SSAValueCtx()
   input_cast_ops={}
+
+  # Build the lower and upper bounds up - note how we are picking off the first stencil
+  # result here, we assume currently only one per stencil - need to enhance when we
+  # support multiple ones
+  lb=get_stencil_data_range(stencil_stmt.body.blocks[0].ops[0].from_bounds.data, -2)
+  ub=get_stencil_data_range(stencil_stmt.body.blocks[0].ops[0].to_bounds.data, 1)
+
   for field in stencil_stmt.input_fields.data:
     assert isinstance(field.type, psy_ir.ArrayType)
     array_sizes=get_array_sizes(field.type)
     el_type=try_translate_type(field.type.element_type)
     external_load_op=stencil.ExternalLoadOp.get(ctx[field.var_name.data], stencil.FieldType.from_shape(array_sizes, el_type))
-    lb=stencil.IndexAttr.get(-1,-1)
-    ub=stencil.IndexAttr.get(*array_sizes)
     cast_op=stencil.CastOp.get(external_load_op.results[0], lb, ub, external_load_op.results[0].typ)
     input_cast_ops[field.var_name.data]=cast_op
     load_op=stencil.LoadOp.get(cast_op.results[0])
@@ -628,8 +652,6 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
       array_sizes=get_array_sizes(field.type)
       el_type=try_translate_type(field.type.element_type)
       external_load_op=stencil.ExternalLoadOp.get(ctx[field.var_name.data], stencil.FieldType.from_shape(array_sizes, el_type))
-      lb=stencil.IndexAttr.get(-1,-1)
-      ub=stencil.IndexAttr.get(*array_sizes)
       output_field_cast_op=stencil.CastOp.get(external_load_op.results[0], lb, ub, external_load_op.results[0].typ)
       load_op=stencil.LoadOp.get(output_field_cast_op.results[0])
       ops+=[external_load_op, output_field_cast_op, load_op]
