@@ -180,7 +180,7 @@ class ConnectExternalLoadToFunctionInput(RewritePattern):
     num_prev_external_loads=(ConnectExternalLoadToFunctionInput.count_instances_preceeding(op.parent.ops, idx-1, stencil.ExternalLoadOp))
 
     ptr_type=op.parent.args[num_prev_external_loads].typ
-    array_typ=llvm.LLVMArrayType.from_type_and_size(builtin.i64, builtin.IntAttr(number_dims))
+    array_typ=llvm.LLVMArrayType.from_size_and_type(builtin.IntAttr(number_dims), builtin.i64)
     struct_type=llvm.LLVMStructType.from_type_list([ptr_type, ptr_type, builtin.i64, array_typ, array_typ])
 
     undef_memref_struct=llvm.LLVMMLIRUndef.create(result_types=[struct_type])
