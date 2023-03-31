@@ -65,6 +65,7 @@ class GetConstantValue(Visitor):
       raise Exception(f"Can not find value for variable {id_expr.var.var_name.data}")
     else:
       self.store=find_var_val.var_value
+      if self.active_op == 0: self.literal=self.store
 
   def traverse_assign(self, assign:psy_ir.Assign):
     self.active_op+=1
@@ -178,9 +179,10 @@ class DetermineMinMaxRelativeOffsetsAcrossStencilAccesses(Visitor):
     self.index=index
 
   def traverse_psy_stencil__access(self, stencil_access: psy_stencil.PsyStencil_Access):
-    val=stencil_access.stencil_ops.data[self.index].data
-    if self.min is None or self.min > val: self.min=val
-    if self.max is None or self.max < val: self.max=val
+    if len(stencil_access.stencil_ops.data) > self.index:
+      val=stencil_access.stencil_ops.data[self.index].data
+      if self.min is None or self.min > val: self.min=val
+      if self.max is None or self.max < val: self.max=val
 
 class CollectArrayRelativeOffsets(Visitor):
   def __init__(self):
@@ -237,7 +239,8 @@ class ApplyStencilRewriter(RewritePattern):
     def build_bounds(index_variable_names, constants_dir, index):
       bounds=[]
       for var_name in index_variable_names:
-        bounds.append(IntAttr(constants_dir[var_name][index]))
+        if constants_dir[var_name][index] is not None:
+          bounds.append(IntAttr(constants_dir[var_name][index]))
       return bounds
 
     def get_dag_top_level(node):
@@ -308,11 +311,14 @@ class ApplyStencilRewriter(RewritePattern):
 
           min_indicies=[]
           max_indicies=[]
+
           for i in range(len(index_variable_names)):
             offset_indexes=DetermineMinMaxRelativeOffsetsAcrossStencilAccesses(i)
             offset_indexes.traverse(rhs)
-            min_indicies.append(IntAttr(offset_indexes.min))
-            max_indicies.append(IntAttr(offset_indexes.max))
+            if offset_indexes.min is not None:
+              min_indicies.append(IntAttr(offset_indexes.min))
+            if offset_indexes.max is not None:
+              max_indicies.append(IntAttr(offset_indexes.max))
 
           # Grab the lower and upper bounds for the stencil application
           lb=ApplyStencilRewriter.build_bounds(index_variable_names, loop_numeric_bounds, 0)
@@ -325,8 +331,10 @@ class ApplyStencilRewriter(RewritePattern):
 
           write_var=visitor.written_variables[target_var_name].var
 
-          stencil_result=psy_stencil.PsyStencil_Result.build(attributes={"var": assign_op.lhs.blocks[0].ops[0].var,
-              "stencil_ops": ArrayAttr([]), "from_bounds": ArrayAttr(lb), "to_bounds": ArrayAttr(ub),
+          # For now assume only one result per stencil, hence use same stencil read_vars as input_fields to stencil result
+          stencil_result=psy_stencil.PsyStencil_Result.build(attributes={"out_field": assign_op.lhs.blocks[0].ops[0].var,
+              "input_fields": ArrayAttr(read_vars), "stencil_ops": ArrayAttr([]),
+              "from_bounds": ArrayAttr(lb), "to_bounds": ArrayAttr(ub),
               "min_relative_offset": ArrayAttr(min_indicies), "max_relative_offset": ArrayAttr(max_indicies)}, regions=[[rhs]])
           stencil_op=psy_stencil.PsyStencil_Stencil.build(attributes={"input_fields": ArrayAttr(read_vars), "output_fields":ArrayAttr([write_var])}, regions=[[stencil_result]])
           return v3.top_loop, assign_op, stencil_op
