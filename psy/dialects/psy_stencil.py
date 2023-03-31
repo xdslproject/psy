@@ -40,6 +40,7 @@ class PsyStencil_Result(Operation):
     to_bounds: OpAttr[ArrayAttr]
     min_relative_offset: OpAttr[ArrayAttr]
     max_relative_offset: OpAttr[ArrayAttr]
-    var: OpAttr[AnyAttr()]
+    out_field: OpAttr[AnyAttr()]
+    input_fields: OpAttr[ArrayAttr]
     stencil_ops: OpAttr[ArrayAttr]
     stencil_accesses: SingleBlockRegion

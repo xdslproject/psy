@@ -566,20 +566,38 @@ def translate_psy_stencil_access(ctx: SSAValueCtx, stencil_access: Operation, pr
   return [access_op], access_op.results[0]
 
 def translate_psy_stencil_result(ctx: SSAValueCtx, stencil_result: Operation, program_state : ProgramState) -> List[Operation]:
-  input_types=[ctx[stencil_result.var.var_name.data].typ]
-  c = SSAValueCtx(dictionary=dict(), #zip(param_names, block.args)),
-                    parent_scope=ctx)
-  block = Block.from_arg_types(input_types)
+  block_fields={}
+  for var in stencil_result.input_fields.data:
+    block_fields[var.var_name.data]=ctx[var.var_name.data].typ
 
-  c[stencil_result.var.var_name.data]=block.args[0]
+  #if stencil_result.out_field.var_name.data not in block_fields.keys():
+  #  block_fields[stencil_result.out_field.var_name.data]=ctx[stencil_result.out_field.var_name.data].typ
+
+  block_types=[]
+  block_idx={}
+  block_ops=[]
+  for index, (key, value) in enumerate(block_fields.items()):
+    block_types.append(value)
+    block_ops.append(ctx[key])
+    block_idx[key]=index
+
+
+  c = SSAValueCtx(dictionary=dict(),
+                    parent_scope=ctx)
+  block = Block.from_arg_types(block_types)
+
+  for key, index in block_idx.items():
+    c[key]=block.args[index]
+
+  #c[stencil_result.var.var_name.data]=block.args[0]
 
   ops: List[Operation] = []
   for op in stencil_result.stencil_accesses.blocks[0].ops:
     stmt_ops, ssa = translate_expr(c, op, program_state)
     ops += stmt_ops
 
-  assert isinstance(stencil_result.var.type, psy_ir.ArrayType)
-  el_type=try_translate_type(stencil_result.var.type.element_type)
+  assert isinstance(stencil_result.out_field.type, psy_ir.ArrayType)
+  el_type=try_translate_type(stencil_result.out_field.type.element_type)
   assert el_type is not None
   rt=stencil.ResultType([el_type])
 
@@ -588,7 +606,7 @@ def translate_psy_stencil_result(ctx: SSAValueCtx, stencil_result: Operation, pr
 
   block.add_ops(ops)
 
-  array_sizes=get_array_sizes(stencil_result.var.type)
+  array_sizes=get_array_sizes(stencil_result.out_field.type)
   assert len(array_sizes) == len(stencil_result.from_bounds.data)
   assert len(array_sizes) == len(stencil_result.to_bounds.data)
 
@@ -603,7 +621,7 @@ def translate_psy_stencil_result(ctx: SSAValueCtx, stencil_result: Operation, pr
 
   lb=stencil.IndexAttr.get(*lb_ints)
   ub=stencil.IndexAttr.get(*ub_ints)
-  apply_op=stencil.ApplyOp.get([ctx[stencil_result.var.var_name.data]], block, lb, ub)
+  apply_op=stencil.ApplyOp.get(block_ops, block, lb, ub)
 
   return [apply_op]
 
@@ -632,13 +650,18 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
   # support multiple ones
   stencil_result_op=stencil_stmt.body.blocks[0].ops[0]
   # -1 further offset for lb as Fortran array is 1 indexed, whereas C is 0 - so need to apply that here too
-  lb=get_stencil_data_range(stencil_result_op.from_bounds.data, stencil_result_op.min_relative_offset.data, -1)
+  #lb=get_stencil_data_range(stencil_result_op.from_bounds.data, stencil_result_op.min_relative_offset.data, -1)
   # No need for a further offset as loop in C is less than, rather than less than equals in Fortran so all good!
-  ub=get_stencil_data_range(stencil_result_op.to_bounds.data, stencil_result_op.max_relative_offset.data)
+  #ub=get_stencil_data_range(stencil_result_op.to_bounds.data, stencil_result_op.max_relative_offset.data)
 
   for field in stencil_stmt.input_fields.data:
     assert isinstance(field.type, psy_ir.ArrayType)
     array_sizes=get_array_sizes(field.type)
+
+    # For now hack these in, as need to ensure memref cast that is generated is of correct size of
+    # input array
+    lb=stencil.IndexAttr.get(*([0]*len(array_sizes)))
+    ub=stencil.IndexAttr.get(*[v for v in array_sizes])
     el_type=try_translate_type(field.type.element_type)
     external_load_op=stencil.ExternalLoadOp.get(ctx[field.var_name.data], stencil.FieldType.from_shape(array_sizes, el_type))
     cast_op=stencil.CastOp.get(external_load_op.results[0], lb, ub, external_load_op.results[0].typ)
