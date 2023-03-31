@@ -13,12 +13,65 @@ class AccessMode(Enum):
     WRITE = 1
     READ = 2
 
+class GetVariableValue(Visitor):
+  def __init__(self, var_name, dag_top_level):
+    self.var_name=var_name
+    self.dag_top_level=dag_top_level
+    self.var_value=None
+
+  def traverse_assign(self, assign:psy_ir.Assign):
+    if isinstance(assign.lhs.blocks[0].ops[0], psy_ir.ExprName):
+      if (assign.lhs.blocks[0].ops[0].var.var_name.data == self.var_name):
+        cv=GetConstantValue(self.dag_top_level)
+        cv.traverse(assign.rhs.blocks[0].ops[0])
+        self.var_value=cv.literal
+
 class GetConstantValue(Visitor):
-  def __init__(self):
+  def __init__(self, dag_top_level):
     self.literal=None
+    self.store=None
+    self.active_op=0
+    self.dag_top_level=dag_top_level
 
   def traverse_literal(self, literal: psy_ir.Literal):
-    self.literal=literal.value.value.data
+    if self.active_op > 0:
+      self.store=literal.value.value.data
+    else:
+      self.literal=literal.value.value.data
+
+  def traverse_binary_operation(self, bin_op: psy_ir.BinaryOperation):
+    self.active_op+=1
+    self.traverse(bin_op.lhs.blocks[0].ops[0])
+    lhs_v=self.store
+    self.store=None
+    self.traverse(bin_op.rhs.blocks[0].ops[0])
+    if bin_op.op.data == "SUB":
+      self.store=lhs_v - self.store
+    elif bin_op.op.data == "ADD":
+      self.store=lhs_v - self.store
+    elif bin_op.op.data == "MUL":
+      self.store=lhs_v * self.store
+    elif bin_op.op.data == "DIV":
+      self.store=lhs_v / self.store
+    else:
+      raise Exception(f"Unable to handle binary operation '{bin_op.op.data}' in range extraction")
+    self.active_op-=1
+    if self.active_op == 0: self.literal=self.store
+
+  def traverse_expr_name(self, id_expr: psy_ir.ExprName):
+    find_var_val=GetVariableValue(id_expr.var.var_name.data, self.dag_top_level)
+    find_var_val.traverse(self.dag_top_level)
+    if find_var_val.var_value is None:
+      raise Exception(f"Can not find value for variable {id_expr.var.var_name.data}")
+    else:
+      self.store=find_var_val.var_value
+
+  def traverse_assign(self, assign:psy_ir.Assign):
+    self.active_op+=1
+    for op in assign.rhs.blocks[0].ops:
+      self.traverse(op)
+    self.active_op-=1
+    if self.active_op == 0: self.literal=self.store
 
 class LocateAssignment(Visitor):
   def __init__(self, name):
@@ -187,6 +240,10 @@ class ApplyStencilRewriter(RewritePattern):
         bounds.append(IntAttr(constants_dir[var_name][index]))
       return bounds
 
+    def get_dag_top_level(node):
+      if node.parent == None: return node
+      return ApplyStencilRewriter.get_dag_top_level(node.parent)
+
     def handle_stencil_for_target(self, visitor, index, target_var_name, for_loop: psy_ir.Loop, rewriter: PatternRewriter):
         read_vars=[]
         access_variables=[]
@@ -215,10 +272,11 @@ class ApplyStencilRewriter(RewritePattern):
         loop_var_name.traverse(for_loop)
         loop_numeric_bounds={}
         for key, value in loop_var_name.located_loops.items():
-            from_bound=GetConstantValue()
+            top_level=ApplyStencilRewriter.get_dag_top_level(value.start.blocks[0].ops[0])
+            from_bound=GetConstantValue(top_level)
             from_bound.traverse(value.start.blocks[0].ops[0])
 
-            to_bound=GetConstantValue()
+            to_bound=GetConstantValue(top_level)
             to_bound.traverse(value.stop.blocks[0].ops[0])
 
             loop_numeric_bounds[key]=[from_bound.literal, to_bound.literal]
