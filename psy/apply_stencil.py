@@ -247,7 +247,7 @@ class ApplyStencilRewriter(RewritePattern):
       if node.parent == None: return node
       return ApplyStencilRewriter.get_dag_top_level(node.parent)
 
-    def handle_stencil_for_target(self, visitor, index, target_var_name, for_loop: psy_ir.Loop, rewriter: PatternRewriter):
+    def handle_stencil_for_target(self, visitor, index, target_var_name, for_loop: psy_ir.Loop, rewriter: PatternRewriter, unique_var_idx:int):
         read_vars=[]
         access_variables=[]
         for read_var_name in visitor.written_to_read[index]:
@@ -290,16 +290,16 @@ class ApplyStencilRewriter(RewritePattern):
         if self.allIndexesFilled(v3.applicable_indicies):
           loop_body=v3.bottom_loop.body.blocks[0].ops
 
-          # Note there is a significant simplication here! We assume if there are multiple targets and these
-          # share a name, then they are all of the same name. As we use use the index directly, then a, a
-          # will work, but a, b, a will not
+          # This is needed for multiple assignments with the same name, thats why we have unique_var_idx
+          # here, which is tracked from the caller. This is the index per variable name, so we can jump
+          # to the corresponding assignment and use it
           v=LocateAssignment(target_var_name)
           v.traverse(for_loop)
           assert len(v.assign) != 0
           if len(v.assign) == 1:
             assign_op=v.assign[0]
           else:
-            assign_op=v.assign[index]
+            assign_op=v.assign[unique_var_idx]
           assert assign_op is not None
 
           rhs=assign_op.rhs.blocks[0].ops[0]
@@ -349,8 +349,12 @@ class ApplyStencilRewriter(RewritePattern):
         visitor = CollectApplicableVariables()
         visitor.traverse(for_loop)
 
+        unique_written_vars={}
+
         for index, written_var in visitor.ordered_writes.items():
-          top_loop, assignment_op, stencil_op=self.handle_stencil_for_target(visitor, index, written_var, for_loop, rewriter)
+          unique_var_idx=unique_written_vars.get(written_var, 0)
+          top_loop, assignment_op, stencil_op=self.handle_stencil_for_target(visitor, index, written_var, for_loop, rewriter, unique_var_idx)
+          unique_written_vars[written_var]=unique_var_idx+1
           if top_loop is not None and assignment_op is not None and stencil_op is not None:
             # Detach assignment op and then jam stencil into parent of top loop
             assignment_op.detach()
