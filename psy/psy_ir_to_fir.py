@@ -676,6 +676,8 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
     if not field.var_name.data in new_ctx.dictionary.keys():
       assert isinstance(field.type, psy_ir.ArrayType)
       array_sizes=get_array_sizes(field.type)
+      lb=stencil.IndexAttr.get(*([0]*len(array_sizes)))
+      ub=stencil.IndexAttr.get(*[v for v in array_sizes])
       el_type=try_translate_type(field.type.element_type)
       external_load_op=stencil.ExternalLoadOp.get(ctx[field.var_name.data], stencil.FieldType.from_shape(array_sizes, el_type))
       output_field_cast_op=stencil.CastOp.get(external_load_op.results[0], lb, ub, external_load_op.results[0].typ)
