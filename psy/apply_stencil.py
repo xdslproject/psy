@@ -94,20 +94,6 @@ class CollectLoopsWithVariableName(Visitor):
     for op in dl.body.blocks[0].ops:
       self.traverse(op)
 
-class CollectLoopsToReplace(Visitor):
-  def __init__(self, indicies):
-    self.applicable_indicies = {index: None for index in indicies}
-    self.top_loop=None
-    self.bottom_loop=None
-
-  def traverse_loop(self, dl: psy_ir.Loop):
-    if (dl.variable.var_name.data in self.applicable_indicies):
-      self.applicable_indicies[dl.variable.var_name.data]=dl
-      if self.top_loop is None: self.top_loop=dl
-      self.bottom_loop=dl
-    for op in dl.body.blocks[0].ops:
-      self.traverse(op)
-
 class CollectArrayVariableIndexes(Visitor):
   def __init__(self):
     self.array_indexes=[]
@@ -227,6 +213,27 @@ class ReplaceAbsoluteArrayIndexWithStencil(RewritePattern):
     access_op=psy_stencil.PsyStencil_Access.build(attributes={"var": array_reference.var, "stencil_ops": ArrayAttr(stencil_relative_offsets)})
     rewriter.insert_op_at_pos(access_op, parent, idx)
 
+class LoopRangeSearcher():
+  def __init__(self, indicies):
+    self.applicable_indicies = {index: None for index in indicies}
+    self.top_loop=None
+    self.bottom_loop=None
+
+  def _get_parent_op(node):
+    if node is None or node.parent is None or node.parent.parent is None:
+      return None
+    return node.parent.parent.parent
+
+  def search(self, dl: psy_ir.Loop):
+    if isinstance(dl, psy_ir.Loop):
+      if (dl.variable.var_name.data in self.applicable_indicies):
+        self.applicable_indicies[dl.variable.var_name.data]=dl
+        if self.bottom_loop is None: self.bottom_loop=dl
+        self.top_loop=dl
+    loop=LoopRangeSearcher._get_parent_op(dl)
+    if loop is not None:
+      self.search(loop)
+
 class ApplyStencilRewriter(RewritePattern):
     def __init__(self):
       self.called_procedures=[]
@@ -262,6 +269,7 @@ class ApplyStencilRewriter(RewritePattern):
         if len(access_variables) == 0: return None, None, None
 
         written_var=visitor.written_variables[target_var_name]
+
         # Needs to be an array that we are writing into
         assert isinstance(written_var, psy_ir.ArrayReference)
         index_variable_names=[]
@@ -270,24 +278,27 @@ class ApplyStencilRewriter(RewritePattern):
           v2.traverse(idx)
           index_variable_names.extend(v2.array_indexes)
 
-        # Now we collect the literal range (lb, ub) that each written to index is operating over
-        loop_var_name=CollectLoopsWithVariableName(index_variable_names)
-        loop_var_name.traverse(for_loop)
-        loop_numeric_bounds={}
-        for key, value in loop_var_name.located_loops.items():
-            top_level=ApplyStencilRewriter.get_dag_top_level(value.start.blocks[0].ops[0])
-            from_bound=GetConstantValue(top_level)
-            from_bound.traverse(value.start.blocks[0].ops[0])
-
-            to_bound=GetConstantValue(top_level)
-            to_bound.traverse(value.stop.blocks[0].ops[0])
-
-            loop_numeric_bounds[key]=[from_bound.literal, to_bound.literal]
-
-        v3=CollectLoopsToReplace(access_variables)
-        v3.traverse(for_loop)
+        v3=LoopRangeSearcher(access_variables)
+        v3.search(written_var)
 
         if self.allIndexesFilled(v3.applicable_indicies):
+          # Now we collect the literal range (lb, ub) that each written to index is operating over
+          # Work from the top loop that was identified, as we can be sure we have the correct loops
+          # then for this stencil
+          loop_var_name=CollectLoopsWithVariableName(index_variable_names)
+          loop_var_name.traverse(v3.top_loop)
+          loop_numeric_bounds={}
+          for key, value in loop_var_name.located_loops.items():
+              top_level=ApplyStencilRewriter.get_dag_top_level(value.start.blocks[0].ops[0])
+              from_bound=GetConstantValue(top_level)
+              from_bound.traverse(value.start.blocks[0].ops[0])
+
+              to_bound=GetConstantValue(top_level)
+              to_bound.traverse(value.stop.blocks[0].ops[0])
+
+              loop_numeric_bounds[key]=[from_bound.literal, to_bound.literal]
+
+
           loop_body=v3.bottom_loop.body.blocks[0].ops
 
           # This is needed for multiple assignments with the same name, thats why we have unique_var_idx
@@ -350,15 +361,15 @@ class ApplyStencilRewriter(RewritePattern):
         visitor.traverse(for_loop)
 
         unique_written_vars={}
-
         for index, written_var in visitor.ordered_writes.items():
           unique_var_idx=unique_written_vars.get(written_var, 0)
           top_loop, assignment_op, stencil_op=self.handle_stencil_for_target(visitor, index, written_var, for_loop, rewriter, unique_var_idx)
           unique_written_vars[written_var]=unique_var_idx+1
           if top_loop is not None and assignment_op is not None and stencil_op is not None:
             # Detach assignment op and then jam stencil into parent of top loop
+            idx = top_loop.parent.ops.index(top_loop)
             assignment_op.detach()
-            top_loop.parent.add_op(stencil_op)
+            top_loop.parent.insert_op(stencil_op, idx)
           else:
             # If one is none, ensure all are
             assert top_loop is None and assignment_op is None and stencil_op is None
