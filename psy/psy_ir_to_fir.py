@@ -1367,6 +1367,8 @@ def try_translate_expr(
       return translate_binary_expr(ctx, op, program_state)
     if isinstance(op, psy_ir.UnaryOperation):
       return translate_unary_expr(ctx, op, program_state)
+    if isinstance(op, psy_ir.NaryOperation):
+      return translate_nary_expr(ctx, op, program_state)
     if isinstance(op, psy_ir.CallExpr):
       call_expr= translate_call_expr_stmt(ctx, op, program_state, True)
       return call_expr, call_expr[-1].results[0]
@@ -1455,6 +1457,29 @@ def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, 
   coordinate_of=fir.CoordinateOf.create(attributes={"baseType": base_type}, operands=ssa_list, result_types=[fir.ReferenceType([fir_type.type])])
   expressions.append(coordinate_of)
   return expressions, coordinate_of.results[0]
+
+def translate_nary_expr(ctx: SSAValueCtx,
+        unary_expr: psy_ir.UnaryOperation, program_state : ProgramState) -> Tuple[List[Operation], SSAValue]:
+  expr_ssa=[]
+  ops_to_add=[]
+  for op in unary_expr.expr.blocks[0].ops:
+    expr, expr_ssa_value = translate_expr(ctx, op, program_state)
+    expr_ssa.append(expr_ssa_value)
+    ops_to_add+=expr
+
+  attr = unary_expr.op
+  if attr.data == "MIN" or attr.data == "MAX":
+    comparison_op="slt" if attr.data == "MIN" else "sgt"
+    prev_min_ssa=expr_ssa[0]
+    for idx in range(1, len(expr_ssa)):
+      compare_op=arith.Cmpi.from_mnemonic(prev_min_ssa, expr_ssa[idx], comparison_op)
+      select_op=arith.Select.get(compare_op.results[0], prev_min_ssa, expr_ssa[idx])
+      prev_min_ssa=select_op.results[0]
+      ops_to_add+=[compare_op, select_op]
+    return ops_to_add, prev_min_ssa
+  else:
+    raise Exception(f"Nary operation '{attr.data}' not supported")
+
 
 def translate_unary_expr(ctx: SSAValueCtx,
         unary_expr: psy_ir.UnaryOperation, program_state : ProgramState) -> Tuple[List[Operation], SSAValue]:
