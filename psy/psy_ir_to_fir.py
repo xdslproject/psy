@@ -1461,18 +1461,24 @@ def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, 
 def translate_nary_expr(ctx: SSAValueCtx,
         unary_expr: psy_ir.UnaryOperation, program_state : ProgramState) -> Tuple[List[Operation], SSAValue]:
   expr_ssa=[]
+  ssa_type=None
   ops_to_add=[]
   for op in unary_expr.expr.blocks[0].ops:
     expr, expr_ssa_value = translate_expr(ctx, op, program_state)
+    if ssa_type is None:
+      ssa_type=expr_ssa_value.typ
+    if ssa_type != expr_ssa_value.typ:
+      raise Exception(f"All operand types must be same type for nary operation")
     expr_ssa.append(expr_ssa_value)
     ops_to_add+=expr
 
   attr = unary_expr.op
   if attr.data == "MIN" or attr.data == "MAX":
-    comparison_op="slt" if attr.data == "MIN" else "sgt"
+    comparison_op_str="slt" if attr.data == "MIN" else "sgt"
     prev_min_ssa=expr_ssa[0]
+    comparison_op=arith.Cmpi if isinstance(ssa_type, IntegerType) else arith.Cmpf
     for idx in range(1, len(expr_ssa)):
-      compare_op=arith.Cmpi.from_mnemonic(prev_min_ssa, expr_ssa[idx], comparison_op)
+      compare_op=comparison_op.from_mnemonic(prev_min_ssa, expr_ssa[idx], comparison_op_str)
       select_op=arith.Select.get(compare_op.results[0], prev_min_ssa, expr_ssa[idx])
       prev_min_ssa=select_op.results[0]
       ops_to_add+=[compare_op, select_op]
