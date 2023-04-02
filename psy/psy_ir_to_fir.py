@@ -1516,6 +1516,17 @@ def translate_unary_expr(ctx: SSAValueCtx,
     else:
       raise Exception(f"Can only issue abs on int or float, but issued on {expr_ssa_value.typ}")
 
+  if (attr.data == "MINUS"):
+    if isinstance(expr_ssa_value.typ, AnyFloat):
+      negf_op=arith.Negf.get(expr_ssa_value)
+      return expr + [negf_op], negf_op.results[0]
+    elif isinstance(expr_ssa_value.typ, IntegerType):
+      constant_op=arith.Constant.create(attributes={"value": IntegerAttr(0, expr_ssa_value.typ)}, result_types=[expr_ssa_value.typ])
+      sub_op=arith.Subi.get(constant_op, expr_ssa_value)
+      return expr + [constant_op, sub_op], sub_op.results[0]
+    else:
+      raise Exception(f"Can only issue minus on int or float, but issued on {expr_ssa_value.typ}")
+
   raise Exception(f"Unable to handle unary expression `{attr.data}`")
 
 def get_expression_conversion_type(lhs_type, rhs_type):
