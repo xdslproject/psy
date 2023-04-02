@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Dict
 
 binary_arith_op_matching={"ADD": [arith.Addi, arith.Addf], "SUB":[arith.Subi, arith.Subf], "MUL": [arith.Muli, arith.Mulf], "DIV": [arith.DivSI, arith.Divf], "REM": [arith.RemSI, None],
-"MIN" : [arith.MinSI, arith.Minf], "MAX" : [arith.MaxSI, arith.Maxf], "POW" : [math.IPowIOp, None, None]}
+"MIN" : [arith.MinSI, arith.Minf], "MAX" : [arith.MaxSI, arith.Maxf], "POW" : [math.IPowIOp, None, None], "SIGN": [None, math.CopySignOp]}
 
 binary_arith_psy_to_arith_comparison_op={"EQ": "eq", "NE": "ne", "GT": "sgt", "LT": "slt", "GE": "sge", "LE": "sle"}
 
@@ -1565,6 +1565,8 @@ def get_arith_instance(operation:str, lhs, rhs, program_state : ProgramState):
 
   if operation in binary_arith_psy_to_arith_comparison_op:
     return arith.Cmpi.from_mnemonic(lhs, rhs, binary_arith_psy_to_arith_comparison_op[operation])
+
+  raise Exception(f"Unable to handle arithmetic instance `{operation}`")
 
   return None
 
