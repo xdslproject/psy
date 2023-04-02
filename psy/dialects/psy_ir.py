@@ -507,7 +507,7 @@ class NaryOperation(Operation):
     def get(op: str,
             args: List[Operation],
             verify_op: bool = True) -> BinaryExpr:
-        res = UnaryOperation.build(attributes={"op": StringAttr(op)}, regions=[args])
+        res = NaryOperation.build(attributes={"op": StringAttr(op)}, regions=[args])
         if verify_op:
             # We don't verify nested operations since they might have already been verified
             res.verify(verify_nested_ops=False)
