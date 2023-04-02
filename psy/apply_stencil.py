@@ -361,6 +361,7 @@ class ApplyStencilRewriter(RewritePattern):
         visitor.traverse(for_loop)
 
         unique_written_vars={}
+        assignment_to_remove=[]
         for index, written_var in visitor.ordered_writes.items():
           unique_var_idx=unique_written_vars.get(written_var, 0)
           top_loop, assignment_op, stencil_op=self.handle_stencil_for_target(visitor, index, written_var, for_loop, rewriter, unique_var_idx)
@@ -368,11 +369,17 @@ class ApplyStencilRewriter(RewritePattern):
           if top_loop is not None and assignment_op is not None and stencil_op is not None:
             # Detach assignment op and then jam stencil into parent of top loop
             idx = top_loop.parent.ops.index(top_loop)
-            assignment_op.detach()
+            # Store assignment op and remove later, as unique var idx is keyed on the unmodified DAG
+            # but if remove assignments then will not find the correct one in the handle_stencil_for_target
+            # method
+            assignment_to_remove.append(assignment_op)
             top_loop.parent.insert_op(stencil_op, idx)
           else:
             # If one is none, ensure all are
             assert top_loop is None and assignment_op is None and stencil_op is None
+
+        for op in assignment_to_remove:
+          op.detach()
 
         # Now go through and remove any subloops that are empty
         walker = PatternRewriteWalker(GreedyRewritePatternApplier([RemoveEmptyLoops()]), walk_regions_first=True)
