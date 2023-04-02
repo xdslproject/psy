@@ -1,5 +1,5 @@
 from __future__ import annotations
-from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerType, ArrayAttr, i32, i64, f32, f64, IndexType, DictionaryAttr, IntAttr,
+from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerType, ArrayAttr, i32, i64, f32, f64, f16, IndexType, DictionaryAttr, IntAttr,
       Float16Type, Float32Type, Float64Type, FloatAttr, UnitAttr, DenseIntOrFPElementsAttr, SymbolRefAttr, AnyFloat, TupleType)
 from xdsl.dialects import func, arith, cf, mpi #, gpu
 from xdsl.dialects.experimental import math
@@ -1474,6 +1474,18 @@ def translate_unary_expr(ctx: SSAValueCtx,
   if (attr.data == "SQRT"):
     sqrt_op=math.SqrtOp.get(expr_ssa_value)
     return expr + [sqrt_op], sqrt_op.results[0]
+
+  if (attr.data == "ABS"):
+    if isinstance(expr_ssa_value.typ, AnyFloat):
+      abs_op=math.AbsFOp.get(expr_ssa_value)
+      return expr + [abs_op], abs_op.results[0]
+    elif isinstance(expr_ssa_value.typ, IntegerType):
+      abs_op=math.AbsIOp.get(expr_ssa_value)
+      return expr + [abs_op], abs_op.results[0]
+    else:
+      raise Exception(f"Can only issue abs on int or float, but issued on {expr_ssa_value.typ}")
+
+  raise Exception(f"Unable to handle unary expression `{attr.data}`")
 
 def get_expression_conversion_type(lhs_type, rhs_type):
   if isinstance(lhs_type, IntegerType):
