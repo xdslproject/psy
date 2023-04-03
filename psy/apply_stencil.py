@@ -222,10 +222,8 @@ class RemoveEmptyLoops(RewritePattern):
         for_loop.detach()
 
 class ReplaceAbsoluteArrayIndexWithStencil(RewritePattern):
-  @op_type_rewrite_pattern
-  def match_and_rewrite(
-            self, array_reference: psy_ir.ArrayReference, rewriter: PatternRewriter):
 
+  def generate_stencil_access(array_reference):
     stencil_relative_offsets=[]
     for accessor in array_reference.accessors.blocks[0].ops:
       visitor=CollectArrayRelativeOffsets()
@@ -235,10 +233,19 @@ class ReplaceAbsoluteArrayIndexWithStencil(RewritePattern):
       else:
         stencil_relative_offsets.append(IntAttr(visitor.offset_val))
 
+    access_op=psy_stencil.PsyStencil_Access.build(attributes={"var": array_reference.var, "stencil_ops": ArrayAttr(stencil_relative_offsets)})
+    return access_op
+
+  @op_type_rewrite_pattern
+  def match_and_rewrite(
+            self, array_reference: psy_ir.ArrayReference, rewriter: PatternRewriter):
+
     parent=array_reference.parent
     idx = parent.ops.index(array_reference)
+
+    access_op=ReplaceAbsoluteArrayIndexWithStencil.generate_stencil_access(array_reference)
     array_reference.detach()
-    access_op=psy_stencil.PsyStencil_Access.build(attributes={"var": array_reference.var, "stencil_ops": ArrayAttr(stencil_relative_offsets)})
+
     rewriter.insert_op_at_pos(access_op, parent, idx)
 
 class LoopRangeSearcher():
@@ -344,9 +351,12 @@ class ApplyStencilRewriter(RewritePattern):
           rhs=assign_op.rhs.blocks[0].ops[0]
           rhs.detach()
 
-          replaceArrayIndexWithStencil=ReplaceAbsoluteArrayIndexWithStencil()
-          walker = PatternRewriteWalker(GreedyRewritePatternApplier([replaceArrayIndexWithStencil]), apply_recursively=False)
-          walker.rewrite_module(rhs)
+          if isinstance(rhs, psy_ir.ArrayReference):
+            rhs=ReplaceAbsoluteArrayIndexWithStencil.generate_stencil_access(rhs)
+          else:
+            replaceArrayIndexWithStencil=ReplaceAbsoluteArrayIndexWithStencil()
+            walker = PatternRewriteWalker(GreedyRewritePatternApplier([replaceArrayIndexWithStencil]), apply_recursively=False)
+            walker.rewrite_module(rhs)
 
           min_indicies=[]
           max_indicies=[]
