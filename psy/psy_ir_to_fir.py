@@ -1478,8 +1478,6 @@ def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, 
   expressions=[]
   ssa_list=[]
 
-  boxdims_subtractor=None
-
   base_type=None
 
   if isinstance(ctx[op.var.var_name.data].typ, mpi.VectorType):
@@ -1490,55 +1488,93 @@ def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, 
     # We need to debox this
     box_type=get_nested_type(ctx[op.var.var_name.data].typ, fir.BoxType)
     heap_type=get_nested_type(ctx[op.var.var_name.data].typ, fir.HeapType)
+    array_type=get_nested_type(ctx[op.var.var_name.data].typ, fir.ArrayType)
 
     load_op=fir.Load.create(operands=[ctx[op.var.var_name.data]], result_types=[box_type])
-    zero_op=arith.Constant.create(attributes={"value": IntegerAttr.from_index_int_value(0)}, result_types=[IndexType()])
-    boxdims_op=fir.BoxDims.create(operands=[load_op.results[0], zero_op.results[0]], result_types=[IndexType(), IndexType(), IndexType()])
-    boxaddr_op=fir.BoxAddr.create(operands=[load_op.results[0]], result_types=[heap_type])
 
-    expressions+=[load_op, zero_op, boxdims_op, boxaddr_op]
-    ssa_list.append(boxaddr_op.results[0])
-    base_type=boxaddr_op.results[0].typ
-    # Below is needed for subtraction from each argument
-    boxdims_subtractor=boxdims_op.results[0]
+    boxdims_ops=[]
+    ops_to_add=[]
+    for i in range(array_type.getNumberDims()):
+      dim_constant_op=arith.Constant.create(attributes={"value": IntegerAttr.from_index_int_value(i)}, result_types=[IndexType()])
+      box_addr_op=fir.BoxDims.create(operands=[load_op.results[0], dim_constant_op.results[0]], result_types=[IndexType(), IndexType(), IndexType()])
+      boxdims_ops.append(box_addr_op)
+      ops_to_add+=[dim_constant_op, box_addr_op]
+
+    boxaddr_op=fir.BoxAddr.create(operands=[load_op.results[0]], result_types=[heap_type])
+    fir_type=fir.ArrayType.from_type_and_list(array_type.type, [fir.DeferredAttr()])
+
+    convert_to_1d_op=fir.Convert.create(operands=[boxaddr_op.results[0]], result_types=[fir.ReferenceType([fir_type])])
+
+    expressions+=[load_op] + ops_to_add + [boxaddr_op, convert_to_1d_op]
+    base_type=convert_to_1d_op.results[0].typ
+
+    ssa_list.append(convert_to_1d_op.results[0])
+
+    arg_ssa_list=[]
+    for idx, accessor in enumerate(op.accessors.blocks[0].ops):
+      expr, ssa=try_translate_expr(ctx, accessor, program_state)
+      expressions.extend(expr)
+
+      index_conv=perform_data_conversion_if_needed(ssa, boxdims_ops[idx].results[0].typ)
+      if index_conv is not None:
+        expressions.append(index_conv)
+        ssa=index_conv.results[0]
+
+      substract_expr=arith.Subi.get(ssa, boxdims_ops[idx].results[0])
+      expressions.append(substract_expr)
+
+      prev_dim=substract_expr.results[0]
+      for i in range(0, idx):
+        multiply_op=arith.Muli.get(boxdims_ops[i].results[1], prev_dim)
+        expressions.append(multiply_op)
+        prev_dim=multiply_op.results[0]
+
+      arg_ssa_list.append(prev_dim)
+
+    top_level=arg_ssa_list[0]
+    for i in range(1, len(arg_ssa_list)):
+      add_op=arith.Addi.get(top_level, arg_ssa_list[i])
+      expressions.append(add_op)
+      top_level=add_op.results[0]
+
+    ssa_list.append(top_level)
+
   else:
     # This is a reference to an array, nice and easy just use it directly
     ssa_list.append(ctx[op.var.var_name.data])
     base_type=ctx[op.var.var_name.data].typ
 
-  for accessor in op.accessors.blocks[0].ops:
-    # A lot of this is doing the subtraction to zero-base each index (default is starting at 1 in Fortran)
-    # TODO - currently we assume always starts at 1 but in Fortran can set this so will need to keep track of that in the declaration and apply here
-    expr, ssa=try_translate_expr(ctx, accessor, program_state)
-    expressions.extend(expr)
-    if boxdims_subtractor is None:
+    for idx, accessor in enumerate(op.accessors.blocks[0].ops):
+      # A lot of this is doing the subtraction to zero-base each index (default is starting at 1 in Fortran)
+      # TODO - currently we assume always starts at 1 but in Fortran can set this so will need to keep track of that in the declaration and apply here
+      expr, ssa=try_translate_expr(ctx, accessor, program_state)
+      expressions.extend(expr)
+
       subtraction_index=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(1, 64)},
-                                         result_types=[i64])
-    else:
-      subtraction_index=fir.Convert.create(operands=[boxdims_subtractor], result_types=[i64])
-    expressions.append(subtraction_index)
+                                          result_types=[i64])
+      expressions.append(subtraction_index)
 
-    lhs_conv_type, rhs_conv_type=get_expression_conversion_type(ssa.typ, subtraction_index.results[0].typ)
+      lhs_conv_type, rhs_conv_type=get_expression_conversion_type(ssa.typ, subtraction_index.results[0].typ)
 
-    lhs_conv=perform_data_conversion_if_needed(ssa, lhs_conv_type)
-    if lhs_conv is not None:
-      expressions.append(lhs_conv)
-      lhs_ssa=lhs_conv.results[0]
-    else:
-      lhs_ssa=ssa
+      lhs_conv=perform_data_conversion_if_needed(ssa, lhs_conv_type)
+      if lhs_conv is not None:
+        expressions.append(lhs_conv)
+        lhs_ssa=lhs_conv.results[0]
+      else:
+        lhs_ssa=ssa
 
-    rhs_conv=perform_data_conversion_if_needed(subtraction_index.results[0], rhs_conv_type)
-    if rhs_conv is not None:
-      expressions.append(rhs_conv)
-      rhs_ssa=rhs_conv.results[0]
-    else:
-      rhs_ssa=subtraction_index.results[0]
+      rhs_conv=perform_data_conversion_if_needed(subtraction_index.results[0], rhs_conv_type)
+      if rhs_conv is not None:
+        expressions.append(rhs_conv)
+        rhs_ssa=rhs_conv.results[0]
+      else:
+        rhs_ssa=subtraction_index.results[0]
 
-    substract_expr=arith.Subi.get(lhs_ssa, rhs_ssa)
-    expressions.append(substract_expr)
-    ssa_list.append(substract_expr.results[0])
+      substract_expr=arith.Subi.get(lhs_ssa, rhs_ssa)
+      expressions.append(substract_expr)
+      ssa_list.append(substract_expr.results[0])
 
-  fir_type=try_translate_type(op.var.type)
+    fir_type=try_translate_type(op.var.type)
 
   coordinate_of=fir.CoordinateOf.create(attributes={"baseType": base_type}, operands=ssa_list, result_types=[fir.ReferenceType([fir_type.type])])
   expressions.append(coordinate_of)
