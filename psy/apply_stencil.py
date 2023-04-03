@@ -125,20 +125,26 @@ class CollectApplicableVariables(Visitor):
       self.traverse(op)
 
   def traverse_array_reference(self, member_access_expr: psy_ir.ArrayReference):
+    var_name=member_access_expr.var.var_name.data
     if self.currentMode == AccessMode.WRITE:
-      self.written_variables[member_access_expr.var.var_name.data]=member_access_expr
-      self.current_written_variable=member_access_expr.var.var_name.data
+      if var_name not in self.written_variables:
+        self.written_variables[var_name]=[]
+      self.written_variables[var_name].append(member_access_expr)
+      self.current_written_variable=var_name
     else:
-      self.read_variables[member_access_expr.var.var_name.data]=member_access_expr
-      self.current_read_variables.append(member_access_expr.var.var_name.data)
+      self.read_variables[var_name]=member_access_expr
+      self.current_read_variables.append(var_name)
 
   def traverse_expr_name(self, id_expr: psy_ir.ExprName):
+    var_name=id_expr.var.var_name.data
     if self.currentMode == AccessMode.WRITE:
-      self.written_variables[id_expr.var.var_name.data]=id_expr
-      self.current_written_variable=id_expr.var.var_name.data
+      if var_name not in self.written_variables:
+        self.written_variables[var_name]=[]
+      self.written_variables[var_name].append(id_expr)
+      self.current_written_variable=var_name
     else:
-      self.read_variables[id_expr.var.var_name.data]=id_expr
-      self.current_read_variables.append(id_expr.var.var_name.data)
+      self.read_variables[var_name]=id_expr
+      self.current_read_variables.append(var_name)
 
   def traverse_loop(self, dl: psy_ir.Loop):
     for op in dl.body.blocks[0].ops:
@@ -268,7 +274,7 @@ class ApplyStencilRewriter(RewritePattern):
 
         if len(access_variables) == 0: return None, None, None
 
-        written_var=visitor.written_variables[target_var_name]
+        written_var=visitor.written_variables[target_var_name][unique_var_idx]
 
         # Needs to be an array that we are writing into
         assert isinstance(written_var, psy_ir.ArrayReference)
@@ -331,6 +337,7 @@ class ApplyStencilRewriter(RewritePattern):
             if offset_indexes.max is not None:
               max_indicies.append(IntAttr(offset_indexes.max))
 
+
           # Grab the lower and upper bounds for the stencil application
           lb=ApplyStencilRewriter.build_bounds(index_variable_names, loop_numeric_bounds, 0)
           ub=ApplyStencilRewriter.build_bounds(index_variable_names, loop_numeric_bounds, 1)
@@ -340,7 +347,7 @@ class ApplyStencilRewriter(RewritePattern):
           assert len(lb) == len(ub)
           assert len(min_indicies) == len(max_indicies)
 
-          write_var=visitor.written_variables[target_var_name].var
+          write_var=visitor.written_variables[target_var_name][unique_var_idx].var
 
           # For now assume only one result per stencil, hence use same stencil read_vars as input_fields to stencil result
           stencil_result=psy_stencil.PsyStencil_Result.build(attributes={"out_field": assign_op.lhs.blocks[0].ops[0].var,
