@@ -67,12 +67,13 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
         for i in range(idx, len(op.parent.ops)):
           stencil_ops.append(op.parent.ops[i])
           if isinstance(op.parent.ops[i], stencil.ExternalLoadOp):
-            ops_to_load_in.append(op)
+            ops_to_load_in.append(op.parent.ops[i])
           if isinstance(op.parent.ops[i], stencil.ExternalStoreOp):
             break
 
         pass_ops=[]
         op_types=[]
+
         for sop in ops_to_load_in:
           nt=self.get_nested_type(sop.field.typ, fir.ArrayType)
           ptr_type=fir.LLVMPointerType([nt.type])
