@@ -49,6 +49,12 @@ class _StencilExtractorRewriteBase(RewritePattern, ABC):
     return func.FuncOp.from_region(name, input_types_translated, [], body)
 
 class ExtractStencilOps(_StencilExtractorRewriteBase):
+
+    def has_nested_type(in_type, search_type):
+      if isinstance(in_type, search_type): return True
+      if getattr(in_type, "type", None) is None: return False
+      return ExtractStencilOps.has_nested_type(in_type.type, search_type)
+
     """
     This will extract the stencil operations and replace them with a function call, converting the
     input array into fir.LLVMPointer type. Note currently this is very limited in terms of assuming
@@ -75,25 +81,42 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
           if isinstance(op.parent.ops[i], stencil.ExternalStoreOp):
             break
 
-        pass_ops=[]
+        arg_ops=[]
         op_types=[]
-
+        ops_to_add=[]
         for sop in ops_to_load_in:
           nt=self.get_nested_type(sop.field.typ, fir.ArrayType)
           ptr_type=fir.LLVMPointerType([nt.type])
           op_types.append(ptr_type)
           if isinstance(sop.field.owner, builtin.UnrealizedConversionCastOp):
-            pass_ops.append(fir.Convert.create(operands=[sop.field.owner.inputs[0]],
-                      result_types=[ptr_type]))
+            # This is deferred type, but just check the type is what we expect
+            # Should be !fir.ref<!fir.box<!fir.heap<!fir.array<?x?x?x!f64>>>>
+            # With any number of array dimensions
+            # In this case need to load and debox it, that gives us a heap
+            # we can then convert to an llvm pointer
+            data_type=sop.field.owner.inputs[0].typ
+            assert isinstance(data_type, fir.ReferenceType)
+            assert ExtractStencilOps.has_nested_type(data_type, fir.BoxType)
+            assert ExtractStencilOps.has_nested_type(data_type, fir.HeapType)
+
+            box_type=self.get_nested_type(data_type, fir.BoxType)
+            heap_type=self.get_nested_type(data_type, fir.HeapType)
+
+            load_op=fir.Load.create(operands=[sop.field.owner.inputs[0]], result_types=[box_type])
+            box_addr_op=fir.BoxAddr.create(operands=[load_op.results[0]], result_types=[heap_type])
+            convert_op=fir.Convert.create(operands=[box_addr_op.results[0]], result_types=[ptr_type])
+            arg_ops.append(convert_op)
+            ops_to_add+=[load_op, box_addr_op, convert_op]
           else:
-            pass_ops.append(fir.Convert.create(operands=[sop.field],
-                      result_types=[ptr_type]))
+            convert_op=fir.Convert.create(operands=[sop.field], result_types=[ptr_type])
+            arg_ops.append(convert_op)
+            ops_to_add+=[convert_op]
 
         function_name="_InternalBridgeStencil_"+str(self.bridge_id)
         self.bridge_id+=1
 
-        call_stencil=fir.Call.create(attributes={"callee": builtin.SymbolRefAttr(function_name)}, operands=[el.results[0] for el in pass_ops], result_types=[])
-        parent_op.insert_op(pass_ops+[call_stencil], idx+1)
+        call_stencil=fir.Call.create(attributes={"callee": builtin.SymbolRefAttr(function_name)}, operands=[el.results[0] for el in arg_ops], result_types=[])
+        parent_op.insert_op(ops_to_add+[call_stencil], idx+1)
         for sop in stencil_ops:
           parent_op.detach_op(sop)
         stencil_bridge_fn=_StencilExtractorRewriteBase.wrap_stencil_in_func(function_name, op_types, stencil_ops)
@@ -155,17 +178,6 @@ class ConnectExternalLoadToFunctionInput(RewritePattern):
     access_dim=len(shape) - dim - 1
     return shape[access_dim].value.data
 
-  def get_array_dimension_stride(array_type, dim):
-    # We need to work back in reverse order, as indexing
-    # is different between C and Fortran
-    shape=array_type.shape.data
-    access_dim=len(shape) - dim - 1
-    stride=0
-    for i in range(access_dim):
-      if stride == 0: stride=1
-      stride*=shape[i].value.data
-    return stride
-
   def get_c_style_array_shape(array_type):
     shape=array_type.shape.data
     c_style=[]
@@ -210,8 +222,8 @@ class ConnectExternalLoadToFunctionInput(RewritePattern):
       insert_size_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i64, [3, dim])},
         operands=[ops_to_add[-1].results[0], size_op.results[0]], result_types=[struct_type])
 
-      dim_stride=ConnectExternalLoadToFunctionInput.get_array_dimension_stride(array_type, dim)
-      stride_op=arith.Constant.from_int_and_width(dim_stride, 64)
+      # One for dimension stride
+      stride_op=arith.Constant.from_int_and_width(1, 64)
       insert_stride_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i64, [4, dim])},
         operands=[insert_size_op.results[0], stride_op.results[0]], result_types=[struct_type])
 
