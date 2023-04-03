@@ -1,6 +1,6 @@
 from __future__ import annotations
 from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerType, ArrayAttr, i32, i64, f32, f64, f16, IndexType, DictionaryAttr, IntAttr,
-      Float16Type, Float32Type, Float64Type, FloatAttr, UnitAttr, DenseIntOrFPElementsAttr, SymbolRefAttr, AnyFloat, TupleType)
+      Float16Type, Float32Type, Float64Type, FloatAttr, UnitAttr, DenseIntOrFPElementsAttr, SymbolRefAttr, AnyFloat, TupleType, UnrealizedConversionCastOp)
 from xdsl.dialects import func, arith, cf, mpi #, gpu
 from xdsl.dialects.experimental import math
 from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext, BlockArgument
@@ -12,6 +12,7 @@ import uuid
 from ftn.dialects import fir
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Dict
+import copy
 
 binary_arith_op_matching={"ADD": [arith.Addi, arith.Addf], "SUB":[arith.Subi, arith.Subf], "MUL": [arith.Muli, arith.Mulf], "DIV": [arith.DivSI, arith.Divf], "REM": [arith.RemSI, None],
 "MIN" : [arith.MinSI, arith.Minf], "MAX" : [arith.MaxSI, arith.Maxf], "POW" : [math.IPowIOp, None, None], "SIGN": [None, math.CopySignOp]}
@@ -453,7 +454,7 @@ def define_array_var(ctx: SSAValueCtx,
         for i in range(num_deferred):
           shape_ops.append(zero_val.results[0])
         shape=fir.Shape.create(operands=shape_ops, result_types=[fir.ShapeType([IntAttr(num_deferred)])])
-        embox=fir.Embox.build(operands=[zero_bits.results[0], shape.results[0], [], []], regions=[[]], result_types=[type])
+        embox=fir.Embox.build(operands=[zero_bits.results[0], shape.results[0], [], [], []], regions=[[]], result_types=[type])
         has_val=fir.HasValue.create(operands=[embox.results[0]])
         region_args=[zero_bits, zero_val, shape, embox, has_val]
 
@@ -606,7 +607,18 @@ def translate_psy_stencil_result(ctx: SSAValueCtx, stencil_result: Operation, pr
 
   block.add_ops(ops)
 
-  array_sizes=get_array_sizes(stencil_result.out_field.type)
+  #num_deferred=count_array_type_contains_deferred(stencil_result.out_field.type)
+  #print(num_deferred)
+  #exit(0)
+
+  num_deferred=stencil_result.out_field.type.get_num_deferred_dim()
+  # Ensure either no dimensions are deferred or they all are
+  assert num_deferred == 0 or num_deferred == stencil_result.out_field.type.get_num_dims()
+  if num_deferred == 0:
+    array_sizes=get_array_sizes(stencil_result.out_field.type)
+  else:
+    array_sizes=interogate_stencil_field_inference_sizes(stencil_result.out_field.var_name.data, stencil_result.parent.ops)
+
   assert len(array_sizes) == len(stencil_result.from_bounds.data)
   assert len(array_sizes) == len(stencil_result.to_bounds.data)
 
@@ -626,11 +638,14 @@ def translate_psy_stencil_result(ctx: SSAValueCtx, stencil_result: Operation, pr
   return [apply_op]
 
 def get_array_sizes(array_type):
-  shape_size=len(array_type.shape.data)
+  return get_size_from_lb_ub_array(array_type.shape.data)
+
+def get_size_from_lb_ub_array(shape_array):
+  shape_size=len(shape_array)
   assert shape_size % 2 == 0
   sizes=[]
   for i in range(0, shape_size, 2):
-    sizes.append((array_type.shape.data[i+1].value.data-array_type.shape.data[i].value.data)+1)
+    sizes.append((shape_array[i+1].value.data-shape_array[i].value.data)+1)
   return sizes
 
 def get_stencil_data_range(bounds_array, relative_offset, further_offset=0):
@@ -639,6 +654,37 @@ def get_stencil_data_range(bounds_array, relative_offset, further_offset=0):
     range_vals.append(d.data + rel_offset.data + further_offset)
   return stencil.IndexAttr.get(*range_vals)
 
+def find_ops_with_type(ops, op_type):
+  located_ops=[]
+  for op in ops:
+    if isinstance(op, op_type): located_ops.append(op)
+  return located_ops
+
+def locate_psy_stencil_deferred_array_info(var_name, ops):
+  deferred_array_info=find_ops_with_type(ops, psy_stencil.PsyStencil_DeferredArrayInfo)
+  for info in deferred_array_info:
+    if info.var.var_name.data == var_name: return info
+  return None
+
+def interogate_stencil_field_inference_sizes(var_name, ops):
+  deferred_array_info=locate_psy_stencil_deferred_array_info(var_name, ops)
+  assert deferred_array_info is not None
+  return get_size_from_lb_ub_array(deferred_array_info.shape.data)
+
+def rebuild_deferred_fir_array_with_bounds(in_type, array_sizes):
+  array_type=get_nested_type(in_type, fir.ArrayType)
+  new_shape=[IntegerAttr(size, 64) for size in array_sizes]
+  new_array=fir.ArrayType.from_type_and_list(array_type.type, new_shape)
+
+  to_add=new_array
+  parent_type=fir.ArrayType
+  while True:
+    parent=get_nested_parent_type(in_type, parent_type)
+    if parent is None: break
+    parent_type=type(parent)
+    to_add=parent_type([to_add])
+
+  return to_add
 
 def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, program_state : ProgramState) -> List[Operation]:
   ops: List[Operation] = []
@@ -648,7 +694,9 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
   # Build the lower and upper bounds up - note how we are picking off the first stencil
   # result here, we assume currently only one per stencil - need to enhance when we
   # support multiple ones
-  stencil_result_op=stencil_stmt.body.blocks[0].ops[0]
+  stencil_results_located=find_ops_with_type(stencil_stmt.body.blocks[0].ops, psy_stencil.PsyStencil_Result)
+  assert len(stencil_results_located) == 1
+  stencil_result_op=stencil_results_located[0]
   # -1 further offset for lb as Fortran array is 1 indexed, whereas C is 0 - so need to apply that here too
   #lb=get_stencil_data_range(stencil_result_op.from_bounds.data, stencil_result_op.min_relative_offset.data, -1)
   # No need for a further offset as loop in C is less than, rather than less than equals in Fortran so all good!
@@ -656,18 +704,33 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
 
   for field in stencil_stmt.input_fields.data:
     assert isinstance(field.type, psy_ir.ArrayType)
-    array_sizes=get_array_sizes(field.type)
+    num_deferred=field.type.get_num_deferred_dim()
+    # Ensure either no dimensions are deferred or they all are
+    assert num_deferred == 0 or num_deferred == field.type.get_num_dims()
+    if num_deferred == 0:
+      array_sizes=get_array_sizes(field.type)
+    else:
+      array_sizes=interogate_stencil_field_inference_sizes(field.var_name.data, stencil_stmt.body.blocks[0].ops)
 
     # For now hack these in, as need to ensure memref cast that is generated is of correct size of
     # input array
     lb=stencil.IndexAttr.get(*([0]*len(array_sizes)))
     ub=stencil.IndexAttr.get(*[v for v in array_sizes])
     el_type=try_translate_type(field.type.element_type)
-    external_load_op=stencil.ExternalLoadOp.get(ctx[field.var_name.data], stencil.FieldType.from_shape(array_sizes, el_type))
+    if num_deferred > 0:
+      # Use an unrealized conversion to pop in the array size information here
+      in_type=ctx[field.var_name.data].typ
+      explicit_size_type=rebuild_deferred_fir_array_with_bounds(in_type, array_sizes)
+      unreconciled_conv_op=UnrealizedConversionCastOp.create(operands=[ctx[field.var_name.data]], result_types=[explicit_size_type])
+      external_load_op=stencil.ExternalLoadOp.get(unreconciled_conv_op.results[0], stencil.FieldType.from_shape(array_sizes, el_type))
+      ops+=[unreconciled_conv_op, external_load_op]
+    else:
+      external_load_op=stencil.ExternalLoadOp.get(ctx[field.var_name.data], stencil.FieldType.from_shape(array_sizes, el_type))
+      ops+=[external_load_op]
     cast_op=stencil.CastOp.get(external_load_op.results[0], lb, ub, external_load_op.results[0].typ)
     input_cast_ops[field.var_name.data]=cast_op
     load_op=stencil.LoadOp.get(cast_op.results[0])
-    ops+=[external_load_op, cast_op, load_op]
+    ops+=[cast_op, load_op]
     new_ctx[field.var_name.data]=load_op.results[0]
 
   output_field_cast_op=None
@@ -675,21 +738,39 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
   for field in stencil_stmt.output_fields.data:
     if not field.var_name.data in new_ctx.dictionary.keys():
       assert isinstance(field.type, psy_ir.ArrayType)
-      array_sizes=get_array_sizes(field.type)
+      num_deferred=field.type.get_num_deferred_dim()
+      # Ensure either no dimensions are deferred or they all are
+      assert num_deferred == 0 or num_deferred == field.type.get_num_dims()
+      if num_deferred == 0:
+        array_sizes=get_array_sizes(field.type)
+      else:
+        array_sizes=interogate_stencil_field_inference_sizes(field.var_name.data, stencil_stmt.body.blocks[0].ops)
+
       lb=stencil.IndexAttr.get(*([0]*len(array_sizes)))
       ub=stencil.IndexAttr.get(*[v for v in array_sizes])
       el_type=try_translate_type(field.type.element_type)
-      external_load_op=stencil.ExternalLoadOp.get(ctx[field.var_name.data], stencil.FieldType.from_shape(array_sizes, el_type))
+      if num_deferred > 0:
+        # Use an unrealized conversion to pop in the array size information here
+        in_type=ctx[field.var_name.data].typ
+        explicit_size_type=rebuild_deferred_fir_array_with_bounds(in_type, array_sizes)
+        unreconciled_conv_op=UnrealizedConversionCastOp.create(operands=[ctx[field.var_name.data]], result_types=[explicit_size_type])
+        external_load_op=stencil.ExternalLoadOp.get(unreconciled_conv_op.results[0], stencil.FieldType.from_shape(array_sizes, el_type))
+        ops+=[unreconciled_conv_op, external_load_op]
+      else:
+        external_load_op=stencil.ExternalLoadOp.get(ctx[field.var_name.data], stencil.FieldType.from_shape(array_sizes, el_type))
+        ops+=[external_load_op]
       output_field_cast_op=stencil.CastOp.get(external_load_op.results[0], lb, ub, external_load_op.results[0].typ)
       load_op=stencil.LoadOp.get(output_field_cast_op.results[0])
-      ops+=[external_load_op, output_field_cast_op, load_op]
+      ops+=[output_field_cast_op, load_op]
       new_ctx[field.var_name.data]=load_op.results[0]
     else:
       output_field_cast_op=input_cast_ops[field.var_name.data]
 
   for op in stencil_stmt.body.blocks[0].ops:
-    stmt_ops = translate_stmt(new_ctx, op, program_state)
-    ops += stmt_ops
+    if not isinstance(op, psy_stencil.PsyStencil_DeferredArrayInfo):
+      # Ignore the deferred array info statements
+      stmt_ops = translate_stmt(new_ctx, op, program_state)
+      ops += stmt_ops
 
   out_var=stencil_stmt.output_fields.data[0].var_name.data
   index_location=stencil.IndexAttr.get(*array_sizes)
@@ -1214,7 +1295,7 @@ def translate_deallocate_intrinsic_call_expr(ctx: SSAValueCtx,
     for i in range(num_deferred):
       shape_operands.append(zero_val_op.results[0])
     shape_op=fir.Shape.create(operands=shape_operands, result_types=[fir.ShapeType([IntAttr(num_deferred)])])
-    embox_op=fir.Embox.build(operands=[zero_bits_op.results[0], shape_op.results[0], [], []], regions=[[]], result_types=[box_type])
+    embox_op=fir.Embox.build(operands=[zero_bits_op.results[0], shape_op.results[0], [], [], []], regions=[[]], result_types=[box_type])
     store_op=fir.Store.create(operands=[embox_op.results[0], target_ssa])
 
     return op+[freemem_op, zero_bits_op, zero_val_op, shape_op, embox_op, store_op]
@@ -1243,7 +1324,7 @@ def translate_allocate_intrinsic_call_expr(ctx: SSAValueCtx,
 
     allocmem_op=fir.Allocmem.build(attributes={"in_type":array_type, "uniq_name": StringAttr(var_name+".alloc")}, operands=[[], args], regions=[[]], result_types=[heap_type])
     shape_op=fir.Shape.create(operands=args, result_types=[fir.ShapeType([IntAttr(len(args))])])
-    embox_op=fir.Embox.build(operands=[allocmem_op.results[0], shape_op.results[0], [], []], regions=[[]], result_types=[fir.BoxType([heap_type])])
+    embox_op=fir.Embox.build(operands=[allocmem_op.results[0], shape_op.results[0], [], [], []], regions=[[]], result_types=[fir.BoxType([heap_type])])
     store_op=fir.Store.create(operands=[embox_op.results[0], target_ssa])
     ops+=[allocmem_op, shape_op, embox_op, store_op]
     return ops
@@ -1251,6 +1332,11 @@ def translate_allocate_intrinsic_call_expr(ctx: SSAValueCtx,
 def get_nested_type(in_type, search_type):
   if isinstance(in_type, search_type): return in_type
   return get_nested_type(in_type.type, search_type)
+
+def get_nested_parent_type(in_type, search_type):
+  if not hasattr(in_type, "type"): return None
+  if isinstance(in_type.type, search_type): return in_type
+  return get_nested_parent_type(in_type.type, search_type)
 
 def has_nested_type(in_type, search_type):
   if isinstance(in_type, search_type): return True
@@ -1289,7 +1375,7 @@ def translate_user_call_expr(ctx: SSAValueCtx,
             val=array_type.shape.data[0].value.data
             constant_op=arith.Constant.create(attributes={"value": IntegerAttr.from_index_int_value(val)}, result_types=[IndexType()])
             shape_op=fir.Shape.create(operands=[constant_op.results[0]], result_types=[fir.ShapeType([IntAttr(1)])])
-            embox_op=fir.Embox.build(operands=[arg, shape_op.results[0], [], []], regions=[[]], result_types=[fir.BoxType([array_type])])
+            embox_op=fir.Embox.build(operands=[arg, shape_op.results[0], [], [], []], regions=[[]], result_types=[fir.BoxType([array_type])])
             convert_op=fir.Convert.create(operands=[embox_op.results[0]], result_types=[fn_info.args[index]])
             ops+=[constant_op, shape_op, embox_op, convert_op]
             args.append(convert_op.results[0])

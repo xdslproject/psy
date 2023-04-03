@@ -85,6 +85,12 @@ class ArrayType(ParametrizedAttribute):
     def get_num_dims(self) -> int:
         return len(self.parameters[0].data)
 
+    def get_num_deferred_dim(self) -> int:
+        num_deferred=0
+        for dim_shape in self.get_shape():
+          if isinstance(dim_shape, DeferredAttr): num_deferred+=1
+        return num_deferred
+
     def get_shape(self) -> List[int]:
         shape=[]
         for i in self.shape.data:

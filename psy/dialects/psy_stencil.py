@@ -33,6 +33,13 @@ class PsyStencil_Access(Operation):
     stencil_ops: OpAttr[ArrayAttr]
 
 @irdl_op_definition
+class PsyStencil_DeferredArrayInfo(Operation):
+    name: str = "psy.stencil.deferredarrayinfo"
+
+    var: OpAttr[AnyAttr()]
+    shape: OpAttr[ArrayAttr]
+
+@irdl_op_definition
 class PsyStencil_Result(Operation):
     name: str = "psy.stencil.result"
 

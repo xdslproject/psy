@@ -62,6 +62,10 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
     def match_and_rewrite(self, op: stencil.ExternalLoadOp, rewriter: PatternRewriter, /):
         parent_op=op.parent
         idx = parent_op.ops.index(op)
+        if idx > 0 and isinstance(op.parent.ops[idx-1], builtin.UnrealizedConversionCastOp):
+          # We do this to catch any unrealized conversion cast that preceeds the first external load
+          # this will be detached later on, but needs to be in the extracted function to do so
+          idx-=1
         stencil_ops=[]
         ops_to_load_in=[]
         for i in range(idx, len(op.parent.ops)):
@@ -78,7 +82,11 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
           nt=self.get_nested_type(sop.field.typ, fir.ArrayType)
           ptr_type=fir.LLVMPointerType([nt.type])
           op_types.append(ptr_type)
-          pass_ops.append(fir.Convert.create(operands=[sop.field],
+          if isinstance(sop.field.owner, builtin.UnrealizedConversionCastOp):
+            pass_ops.append(fir.Convert.create(operands=[sop.field.owner.inputs[0]],
+                      result_types=[ptr_type]))
+          else:
+            pass_ops.append(fir.Convert.create(operands=[sop.field],
                       result_types=[ptr_type]))
 
         function_name="_InternalBridgeStencil_"+str(self.bridge_id)
@@ -215,6 +223,10 @@ class ConnectExternalLoadToFunctionInput(RewritePattern):
     unrealised_conv_cast_op=builtin.UnrealizedConversionCastOp.create(operands=[insert_stride_op.results[0]], result_types=[target_memref_type])
     ops_to_add.append(unrealised_conv_cast_op)
 
+    if idx > 0 and isinstance(op.parent.ops[idx-1], builtin.UnrealizedConversionCastOp):
+      # Remove the unrealized conversion cast as it is no longer needed
+      op.parent.ops[idx-1].detach()
+      idx-=1
 
     block=op.parent
     block.insert_op(ops_to_add, idx)

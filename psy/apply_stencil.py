@@ -13,6 +13,28 @@ class AccessMode(Enum):
     WRITE = 1
     READ = 2
 
+class GetAllocateSizes(Visitor):
+  def __init__(self, var_name, dag_top_level):
+    self.var_name=var_name
+    self.dag_top_level=dag_top_level
+    self.sizes=[]
+
+  def traverse_call_expr(self, call_expr: psy_ir.CallExpr):
+    if call_expr.func.data.upper() == "ALLOCATE":
+      target_var=call_expr.args.blocks[0].ops[0]
+      if target_var.var.var_name.data == self.var_name:
+        for i in range(1, len(call_expr.args.blocks[0].ops)):
+          # Currently only allow variable or literal directly in allocate,
+          # i.e. dont support an expression such as `nx-4`
+          node=call_expr.args.blocks[0].ops[i]
+          if isinstance(node, psy_ir.ExprName):
+            gvv=GetVariableValue(node.var.var_name.data, self.dag_top_level)
+            gvv.traverse(self.dag_top_level)
+            assert gvv.var_value is not None
+            self.sizes.append(gvv.var_value)
+          if isinstance(node, psy_ir.Literal):
+            self.sizes.append(node.value.value.data)
+
 class GetVariableValue(Visitor):
   def __init__(self, var_name, dag_top_level):
     self.var_name=var_name
@@ -349,16 +371,46 @@ class ApplyStencilRewriter(RewritePattern):
 
           write_var=visitor.written_variables[target_var_name][unique_var_idx].var
 
+          deferred_info_ops=[]
+
+          top_level_dag_node=ApplyStencilRewriter.get_dag_top_level(for_loop)
+          for field in read_vars:
+            deferred=ApplyStencilRewriter.look_up_deferred_array_sizes(field, top_level_dag_node)
+            if deferred is not None: deferred_info_ops.append(deferred)
+
+          deferred=ApplyStencilRewriter.look_up_deferred_array_sizes(write_var, top_level_dag_node)
+          if deferred is not None: deferred_info_ops.append(deferred)
+
           # For now assume only one result per stencil, hence use same stencil read_vars as input_fields to stencil result
           stencil_result=psy_stencil.PsyStencil_Result.build(attributes={"out_field": assign_op.lhs.blocks[0].ops[0].var,
               "input_fields": ArrayAttr(read_vars), "stencil_ops": ArrayAttr([]),
               "from_bounds": ArrayAttr(lb), "to_bounds": ArrayAttr(ub),
               "min_relative_offset": ArrayAttr(min_indicies), "max_relative_offset": ArrayAttr(max_indicies)}, regions=[[rhs]])
-          stencil_op=psy_stencil.PsyStencil_Stencil.build(attributes={"input_fields": ArrayAttr(read_vars), "output_fields":ArrayAttr([write_var])}, regions=[[stencil_result]])
+
+          stencil_op=psy_stencil.PsyStencil_Stencil.build(attributes={"input_fields": ArrayAttr(read_vars), "output_fields":ArrayAttr([write_var])}, regions=[deferred_info_ops+[stencil_result]])
           return v3.top_loop, assign_op, stencil_op
         else:
           return None, None, None
 
+    def look_up_deferred_array_sizes(field, top_level):
+      if isinstance(field.type, psy_ir.ArrayType):
+        needs_shape_inference=0
+        for el in field.type.shape.data:
+          if isinstance(el, psy_ir.DeferredAttr):
+            needs_shape_inference+=1
+        # Currently supports either no deferred sizes or all are deferred
+        assert needs_shape_inference == 0 or needs_shape_inference == len(field.type.shape.data)
+        if needs_shape_inference > 0:
+          # Infer size in each dimension for array
+          vt=GetAllocateSizes(field.var_name.data, top_level)
+          vt.traverse(top_level)
+          # Ensure we have sizes for each dimension
+          assert len(vt.sizes) == len(field.type.shape.data)
+          target_shape=[]
+          for s in vt.sizes:
+            target_shape+=[IntegerAttr(1, 32),IntegerAttr(s, 32)]
+          return psy_stencil.PsyStencil_DeferredArrayInfo.build(attributes={"var": field, "shape": ArrayAttr(target_shape)})
+      return None
 
     @op_type_rewrite_pattern
     def match_and_rewrite(
