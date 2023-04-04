@@ -944,6 +944,17 @@ def translate_intrinsic_call_expr(ctx: SSAValueCtx,
       return translate_mpi_allreduce_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
     elif intrinsic_name.lower() == "mpi_bcast":
       return translate_mpi_bcast_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
+    elif intrinsic_name.lower() == "mpi_init" or intrinsic_name.lower() == "mpi_finalize":
+      program_state.setRequiresMPI(True)
+      return []
+    elif intrinsic_name.lower() == "timer_init":
+      return translate_timer_init_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
+    elif intrinsic_name.lower() == "timer_start":
+      return translate_timer_start_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
+    elif intrinsic_name.lower() == "timer_stop":
+      return translate_timer_stop_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
+    elif intrinsic_name.lower() == "timer_report":
+      return translate_timer_report_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
     else:
       raise Exception(f"Could not translate intrinsic`{intrinsic_name}' as unknown")
 
@@ -1181,6 +1192,64 @@ def translate_mpi_commsize_intrinsic_call_expr(ctx: SSAValueCtx,
     mpi_call=mpi.CommSize.get()
     return [mpi_call]
 
+def translate_timer_report_intrinsic_call_expr(ctx: SSAValueCtx,
+                             call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
+    insertExternalFunctionToGlobalState(program_state, "_QMdl_timerPtimer_report", [], None)
+
+    init_call=fir.Call.create(attributes={"callee": SymbolRefAttr("_QMdl_timerPtimer_report")}, operands=[], result_types=[])
+
+    return [init_call]
+
+def translate_timer_init_intrinsic_call_expr(ctx: SSAValueCtx,
+                             call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
+    insertExternalFunctionToGlobalState(program_state, "_QMdl_timerPtimer_init", [], None)
+
+    init_call=fir.Call.create(attributes={"callee": SymbolRefAttr("_QMdl_timerPtimer_init")}, operands=[], result_types=[])
+
+    return [init_call]
+
+def translate_timer_start_intrinsic_call_expr(ctx: SSAValueCtx,
+                             call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
+    assert len(call_expr.args.blocks[0].ops) == 2
+    op_ctrl, arg_ctrl = translate_expr(ctx, call_expr.args.blocks[0].ops[0], program_state)
+    op_desc, arg_desc = translate_expr(ctx, call_expr.args.blocks[0].ops[1], program_state)
+
+    assert isinstance(arg_ctrl.owner, fir.Load)
+    assert arg_ctrl.owner.memref.typ == fir.ReferenceType([i32])
+
+    deferred_char_type=fir.ReferenceType([fir.CharType([fir.IntAttr(1), fir.DeferredAttr()])])
+    convert_op=fir.Convert.create(operands=[arg_desc], result_types=[deferred_char_type])
+
+
+    embox_to_found=arith.Constant.create(attributes={"value": IntegerAttr.from_index_int_value(arg_desc.typ.type.to_index.data)}, result_types=[IndexType()])
+
+    embox_op=emboxchar_op=fir.Emboxchar.create(operands=[convert_op.results[0], embox_to_found.results[0]], result_types=[fir.BoxCharType([fir.IntAttr(1)])])
+
+    absent_op=fir.Absent.create(operands=[], result_types=[fir.ReferenceType([i64])])
+
+    start_call=fir.Call.create(attributes={"callee": SymbolRefAttr("_QMdl_timerPtimer_start")},
+      operands=[arg_ctrl.owner.memref, embox_op.results[0], absent_op.results[0]], result_types=[])
+
+    insertExternalFunctionToGlobalState(program_state, "_QMdl_timerPtimer_start", [start_call.operands[0].typ,
+      start_call.operands[1].typ, start_call.operands[2].typ], None)
+
+    return op_ctrl+op_desc+[convert_op, embox_to_found, embox_op, absent_op, start_call]
+
+def translate_timer_stop_intrinsic_call_expr(ctx: SSAValueCtx,
+                             call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
+    assert len(call_expr.args.blocks[0].ops) == 1
+    op_ctrl, arg_ctrl = translate_expr(ctx, call_expr.args.blocks[0].ops[0], program_state)
+
+    assert isinstance(arg_ctrl.owner, fir.Load)
+    assert arg_ctrl.owner.memref.typ == fir.ReferenceType([i32])
+
+    stop_call=fir.Call.create(attributes={"callee": SymbolRefAttr("_QMdl_timerPtimer_stop")},
+      operands=[arg_ctrl.owner.memref], result_types=[])
+
+    insertExternalFunctionToGlobalState(program_state, "_QMdl_timerPtimer_stop", [stop_call.operands[0].typ], None)
+
+    return op_ctrl+[stop_call]
+
 def translate_print_intrinsic_call_expr(ctx: SSAValueCtx,
                              call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
     arg_operands=[]
@@ -1263,7 +1332,10 @@ def generatePrintForString(program_state, op, arg, init_call_ssa):
 
 def insertExternalFunctionToGlobalState(program_state, function_name, args, result_type):
     if not program_state.hasGlobalFnName(function_name):
-      fn=func.FuncOp.external(function_name, args, [result_type])
+      if result_type is not None:
+        fn=func.FuncOp.external(function_name, args, [result_type])
+      else:
+        fn=func.FuncOp.external(function_name, args, [])
       program_state.appendToGlobal(fn, function_name)
 
 def translate_deallocate_intrinsic_call_expr(ctx: SSAValueCtx,
@@ -1596,11 +1668,14 @@ def translate_nary_expr(ctx: SSAValueCtx,
 
   attr = unary_expr.op
   if attr.data == "MIN" or attr.data == "MAX":
-    comparison_op_str="slt" if attr.data == "MIN" else "sgt"
+    if isinstance(ssa_type, IntegerType):
+      comparison_op_str="slt" if attr.data == "MIN" else "sgt"
+    else:
+      comparison_op_str="olt" if attr.data == "MIN" else "ogt"
     prev_min_ssa=expr_ssa[0]
     comparison_op=arith.Cmpi if isinstance(ssa_type, IntegerType) else arith.Cmpf
     for idx in range(1, len(expr_ssa)):
-      compare_op=comparison_op.from_mnemonic(prev_min_ssa, expr_ssa[idx], comparison_op_str)
+      compare_op=comparison_op.get(prev_min_ssa, expr_ssa[idx], comparison_op_str)
       select_op=arith.Select.get(compare_op.results[0], prev_min_ssa, expr_ssa[idx])
       prev_min_ssa=select_op.results[0]
       ops_to_add+=[compare_op, select_op]
