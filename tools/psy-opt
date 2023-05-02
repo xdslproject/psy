@@ -7,19 +7,14 @@ from io import IOBase
 from xdsl.ir import MLContext
 from xdsl.dialects.builtin import ModuleOp
 
-from psy.psy_ftn_printer import print_fortran
-from xdsl.transforms.lower_mpi import lower_mpi
-from psy.psy_ir_to_fir import psy_ir_to_fir
-#from psy.apply_gpu import apply_gpu_analysis
-from psy.apply_stencil import apply_stencil_analysis
-from psy.extract_stencil import extract_stencil
-from psy.rewrite_fir_to_standard import rewrite_fir_to_standard
+from psy.psy_ir_to_fir import LowerPsyIR
+from psy.apply_stencil import ApplyStencilAnalysis
+from psy.extract_stencil import ExtractStencil
+from psy.rewrite_fir_to_standard import RewriteFIRToStandard
 
 from psy.dialects.psy_ir import psyIR
-from psy.dialects.psy_stencil import Psy_Stencil
-from xdsl.dialects.experimental.stencil import Stencil
-from xdsl.transforms.experimental.ConvertStencilToLLMLIR import ConvertStencilToGPU
-from ftn.dialects.fir import Fir
+from psy.dialects.psy_stencil import psyStencil
+from ftn.dialects.fir import FIR
 from util.semantic_error import SemanticError
 
 from pathlib import Path
@@ -30,28 +25,16 @@ from xdsl.xdsl_opt_main import xDSLOptMain
 
 class PsyOptMain(xDSLOptMain):
 
-    passes_native = [
-      psy_ir_to_fir,
-      lower_mpi,
-      extract_stencil,
-      apply_stencil_analysis,
-      rewrite_fir_to_standard
-#      ConvertStencilToGPU
-#      apply_gpu_analysis,
-#      apply_stencil_analysis
-    ]
-
     def register_all_passes(self):
-        self.available_passes = self.get_passes_as_dict()
-
-    def _output_fortran(prog: ModuleOp, output: IOBase):
-        print_fortran(prog.ops, stream=output)
+        super().register_all_passes()
+        self.register_pass(ApplyStencilAnalysis)
+        self.register_pass(LowerPsyIR)
+        self.register_pass(ExtractStencil)
+        self.register_pass(RewriteFIRToStandard)
 
     def register_all_targets(self):
         super().register_all_targets()
-        self.available_targets['fortran'] = lambda prog, output: print_fortran(prog.ops, stream=output)
         self.available_targets['both'] = self.available_targets['xdsl']
-        #self.available_targets['fortran-openacc'] = lambda prog, output: print_openacc(prog.ops, stream=output)
 
     def setup_pipeline(self):
       super().setup_pipeline()
@@ -59,11 +42,9 @@ class PsyOptMain(xDSLOptMain):
     def register_all_dialects(self):
         super().register_all_dialects()
         """Register all dialects that can be used."""
-        psy_ir = psyIR(self.ctx)
-        ftn_fir = Fir(self.ctx)
-        psy_stencil = Psy_Stencil(self.ctx)
-        #hstencil = HStencil(self.ctx)
-        #stencil = Stencil(self.ctx)
+        self.ctx.register_dialect(psyIR)
+        self.ctx.register_dialect(psyStencil)
+        self.ctx.register_dialect(FIR)        
 
     @staticmethod
     def get_passes_as_dict(
