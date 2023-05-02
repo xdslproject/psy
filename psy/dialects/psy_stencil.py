@@ -2,23 +2,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from xdsl.dialects.builtin import ArrayAttr
+from xdsl.ir import MLContext, Dialect
+from xdsl.irdl import irdl_op_definition, SingleBlockRegion, AnyAttr, OpAttr, IRDLOperation
 
-from xdsl.ir import MLContext, Operation
-from xdsl.irdl import irdl_op_definition, SingleBlockRegion, AnyAttr, OpAttr
-
-
-@dataclass
-class Psy_Stencil:
-    ctx: MLContext
-
-    def __post_init__(self):
-        self.ctx.register_op(PsyStencil_Stencil)
-        self.ctx.register_op(PsyStencil_Access)
-        self.ctx.register_op(PsyStencil_Result)
-
-# Operations
 @irdl_op_definition
-class PsyStencil_Stencil(Operation):
+class PsyStencil_Stencil(IRDLOperation):
     name: str = "psy.stencil.stencil"
 
     input_fields: OpAttr[ArrayAttr]
@@ -26,21 +14,21 @@ class PsyStencil_Stencil(Operation):
     body: SingleBlockRegion
 
 @irdl_op_definition
-class PsyStencil_Access(Operation):
+class PsyStencil_Access(IRDLOperation):
     name: str = "psy.stencil.access"
 
     var: OpAttr[AnyAttr()]
     stencil_ops: OpAttr[ArrayAttr]
 
 @irdl_op_definition
-class PsyStencil_DeferredArrayInfo(Operation):
+class PsyStencil_DeferredArrayInfo(IRDLOperation):
     name: str = "psy.stencil.deferredarrayinfo"
 
     var: OpAttr[AnyAttr()]
     shape: OpAttr[ArrayAttr]
 
 @irdl_op_definition
-class PsyStencil_Result(Operation):
+class PsyStencil_Result(IRDLOperation):
     name: str = "psy.stencil.result"
 
     from_bounds: OpAttr[ArrayAttr]
@@ -51,3 +39,10 @@ class PsyStencil_Result(Operation):
     input_fields: OpAttr[ArrayAttr]
     stencil_ops: OpAttr[ArrayAttr]
     stencil_accesses: SingleBlockRegion
+
+psyStencil = Dialect([
+  PsyStencil_Stencil,
+  PsyStencil_Access,
+  PsyStencil_DeferredArrayInfo,
+  PsyStencil_Result,
+], [])
