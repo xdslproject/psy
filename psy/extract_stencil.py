@@ -10,6 +10,7 @@ from xdsl.pattern_rewriter import (RewritePattern, PatternRewriter,
                                    op_type_rewrite_pattern,
                                    PatternRewriteWalker,
                                    GreedyRewritePatternApplier)
+from xdsl.passes import ModulePass
 from xdsl.dialects import builtin, func, llvm, arith
 from xdsl.dialects.experimental import stencil
 
@@ -65,20 +66,28 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
     load and the external store. Hence we grab all of those as a chunk and move them out
     """
     @op_type_rewrite_pattern
-    def match_and_rewrite(self, op: stencil.ExternalLoadOp, rewriter: PatternRewriter, /):
-        parent_op=op.parent
-        idx = parent_op.ops.index(op)
-        if idx > 0 and isinstance(op.parent.ops[idx-1], builtin.UnrealizedConversionCastOp):
+    def match_and_rewrite(self, external_load_op: stencil.ExternalLoadOp, rewriter: PatternRewriter, /):
+        parent_op=external_load_op.parent
+        idx = None
+        op_list=[op for op in parent_op.ops]
+        for index, test_op in enumerate(parent_op.ops):
+          if test_op == external_load_op:
+            idx=index
+            break
+        assert idx is not None
+        #parent_op.ops.index(op)
+        if idx > 0 and isinstance(op_list[idx-1], builtin.UnrealizedConversionCastOp):
           # We do this to catch any unrealized conversion cast that preceeds the first external load
           # this will be detached later on, but needs to be in the extracted function to do so
           idx-=1
         stencil_ops=[]
         ops_to_load_in=[]
-        for i in range(idx, len(op.parent.ops)):
-          stencil_ops.append(op.parent.ops[i])
-          if isinstance(op.parent.ops[i], stencil.ExternalLoadOp):
-            ops_to_load_in.append(op.parent.ops[i])
-          if isinstance(op.parent.ops[i], stencil.ExternalStoreOp):
+        for index, op in enumerate(parent_op.ops): #range(idx, len(op.parent.ops)):
+          if index < idx: continue
+          stencil_ops.append(op_list[index])
+          if isinstance(op_list[index], stencil.ExternalLoadOp):
+            ops_to_load_in.append(op_list[index])
+          if isinstance(op_list[index], stencil.ExternalStoreOp):
             break
 
         arg_ops=[]
@@ -116,8 +125,10 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
         self.bridge_id+=1
 
         call_stencil=fir.Call.create(attributes={"callee": builtin.SymbolRefAttr(function_name)}, operands=[el.results[0] for el in arg_ops], result_types=[])
-        parent_op.insert_op(ops_to_add+[call_stencil], idx+1)
-        for sop in stencil_ops:
+        #parent_op.insert_op(ops_to_add+[call_stencil], idx+1)
+        #rewriter.insert_op_before(ops_to_add+[call_stencil], external_load_op)
+        parent_op.insert_ops_before(ops_to_add+[call_stencil], external_load_op)
+        for index, sop in enumerate(stencil_ops):
           parent_op.detach_op(sop)
         stencil_bridge_fn=_StencilExtractorRewriteBase.wrap_stencil_in_func(function_name, op_types, stencil_ops)
         self.bridgedFunctions[function_name]=stencil_bridge_fn
@@ -154,9 +165,8 @@ class AddExternalFuncDefs(RewritePattern):
         # for each func found, add a FuncOp to the top of the module.
         for name, types in funcs_to_emit.items():
             arg, res = types
-            rewriter.insert_op_at_pos(func.FuncOp.external(name, arg, res),
-                                      module.body.blocks[0],
-                                      len(module.body.blocks[0].ops))
+            rewriter.insert_op_at_end(func.FuncOp.external(name, arg, res),
+                                      module.body.blocks[0])
 
 class ConnectExternalLoadToFunctionInput(RewritePattern):
 
@@ -197,8 +207,16 @@ class ConnectExternalLoadToFunctionInput(RewritePattern):
     array_type=ConnectExternalLoadToFunctionInput.get_nested_type(op.field.typ, fir.ArrayType)
     number_dims=len(array_type.shape.data)
 
-    idx = op.parent.ops.index(op)
-    num_prev_external_loads=(ConnectExternalLoadToFunctionInput.count_instances_preceeding(op.parent.ops, idx-1, stencil.ExternalLoadOp))
+    op_list=[sop for sop in op.parent.ops]
+    idx = None
+    for index, sop in enumerate(op_list):
+      if sop == op:
+        idx=index
+        break
+
+    assert idx is not None
+
+    num_prev_external_loads=ConnectExternalLoadToFunctionInput.count_instances_preceeding(op.parent.ops, idx-1, stencil.ExternalLoadOp)
 
     ptr_type=op.parent.args[num_prev_external_loads].typ
     array_typ=llvm.LLVMArrayType.from_size_and_type(builtin.IntAttr(number_dims), builtin.i64)
@@ -235,13 +253,13 @@ class ConnectExternalLoadToFunctionInput(RewritePattern):
     unrealised_conv_cast_op=builtin.UnrealizedConversionCastOp.create(operands=[insert_stride_op.results[0]], result_types=[target_memref_type])
     ops_to_add.append(unrealised_conv_cast_op)
 
-    if idx > 0 and isinstance(op.parent.ops[idx-1], builtin.UnrealizedConversionCastOp):
+    if idx > 0 and isinstance(op_list[idx-1], builtin.UnrealizedConversionCastOp):
       # Remove the unrealized conversion cast as it is no longer needed
-      op.parent.ops[idx-1].detach()
+      op_list[idx-1].detach()
       idx-=1
 
     block=op.parent
-    block.insert_op(ops_to_add, idx)
+    block.insert_ops_before(ops_to_add, op_list[idx])
 
     op.operands=[unrealised_conv_cast_op.results[0]]
 
@@ -255,7 +273,14 @@ class ConnectExternalStoreToFunctionInput(RewritePattern):
     # Look up the external load and then external store to that operand
     op.operands=[op.temp, op.temp.op.field]
 
-def extract_stencil(ctx: MLContext, module: builtin.ModuleOp):
+@dataclass
+class ExtractStencil(ModulePass):
+  """
+  This is the entry point for the transformation pass which will then apply the rewriter
+  """
+  name = 'extract-stencil'
+
+  def apply(self, ctx: MLContext, module: builtin.ModuleOp):
     # First extract the stencil aspects and replace with a function call
     extractStencil=ExtractStencilOps()
     walker1 = PatternRewriteWalker(GreedyRewritePatternApplier([
@@ -271,7 +296,7 @@ def extract_stencil(ctx: MLContext, module: builtin.ModuleOp):
 
     # Create a new module with all the stencil functions as part of it
     bridged_functions=[v for v in extractStencil.bridgedFunctions.values()]
-    new_module=builtin.ModuleOp.from_region_or_ops(bridged_functions)
+    new_module=builtin.ModuleOp(bridged_functions)
 
     # Rewrite the stencil functions to hook up the function/block arguments
     walker3 = PatternRewriteWalker(GreedyRewritePatternApplier([
@@ -281,10 +306,9 @@ def extract_stencil(ctx: MLContext, module: builtin.ModuleOp):
     walker3.rewrite_module(new_module)
 
     # Now we want to have two modules packaged together
-    containing_mod=builtin.ModuleOp.from_region_or_ops([])
+    containing_mod=builtin.ModuleOp([])
     module.regions[0].move_blocks(containing_mod.regions[0])
 
     block = Block()
     block.add_ops([new_module, containing_mod])
     module.regions[0].add_block(block)
-
