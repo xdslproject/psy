@@ -1,11 +1,13 @@
 from xdsl.dialects.builtin import ModuleOp
-from xdsl.ir import Operation, SSAValue, Region, Block
+from dataclasses import dataclass
+from xdsl.ir import Operation, SSAValue, Region, Block, MLContext
 from xdsl.dialects.builtin import IntegerAttr, StringAttr, ArrayAttr, IntAttr
 from xdsl.pattern_rewriter import (GreedyRewritePatternApplier,
                                    PatternRewriter, PatternRewriteWalker,
                                    RewritePattern, op_type_rewrite_pattern)
 
 from psy.dialects import psy_ir, psy_stencil
+from xdsl.passes import ModulePass
 from util.visitor import Visitor
 from enum import Enum
 
@@ -23,10 +25,10 @@ class GetAllocateSizes(Visitor):
     if call_expr.func.data.upper() == "ALLOCATE":
       target_var=call_expr.args.blocks[0].ops[0]
       if target_var.var.var_name.data == self.var_name:
-        for i in range(1, len(call_expr.args.blocks[0].ops)):
+        for index, node in enumerate(call_expr.args.blocks[0].ops):
+          if index == 0: continue
           # Currently only allow variable or literal directly in allocate,
           # i.e. dont support an expression such as `nx-4`
-          node=call_expr.args.blocks[0].ops[i]
           if isinstance(node, psy_ir.ExprName):
             gvv=GetVariableValue(node.var.var_name.data, self.dag_top_level)
             gvv.traverse(self.dag_top_level)
@@ -42,10 +44,10 @@ class GetVariableValue(Visitor):
     self.var_value=None
 
   def traverse_assign(self, assign:psy_ir.Assign):
-    if isinstance(assign.lhs.blocks[0].ops[0], psy_ir.ExprName):
-      if (assign.lhs.blocks[0].ops[0].var.var_name.data == self.var_name):
+    if isinstance(assign.lhs.blocks[0].ops.first, psy_ir.ExprName):
+      if (assign.lhs.blocks[0].ops.first.var.var_name.data == self.var_name):
         cv=GetConstantValue(self.dag_top_level)
-        cv.traverse(assign.rhs.blocks[0].ops[0])
+        cv.traverse(assign.rhs.blocks[0].ops.first)
         self.var_value=cv.literal
 
 class GetConstantValue(Visitor):
@@ -63,10 +65,10 @@ class GetConstantValue(Visitor):
 
   def traverse_binary_operation(self, bin_op: psy_ir.BinaryOperation):
     self.active_op+=1
-    self.traverse(bin_op.lhs.blocks[0].ops[0])
+    self.traverse(bin_op.lhs.blocks[0].ops.first)
     lhs_v=self.store
     self.store=None
-    self.traverse(bin_op.rhs.blocks[0].ops[0])
+    self.traverse(bin_op.rhs.blocks[0].ops.first)
     if bin_op.op.data == "SUB":
       self.store=lhs_v - self.store
     elif bin_op.op.data == "ADD":
@@ -102,7 +104,7 @@ class LocateAssignment(Visitor):
     self.assign=[]
 
   def traverse_assign(self, assign:psy_ir.Assign):
-    if (assign.lhs.blocks[0].ops[0].var.var_name.data == self.name):
+    if (assign.lhs.blocks[0].ops.first.var.var_name.data == self.name):
       self.assign.append(assign)
 
 class CollectLoopsWithVariableName(Visitor):
@@ -240,13 +242,8 @@ class ReplaceAbsoluteArrayIndexWithStencil(RewritePattern):
   def match_and_rewrite(
             self, array_reference: psy_ir.ArrayReference, rewriter: PatternRewriter):
 
-    parent=array_reference.parent
-    idx = parent.ops.index(array_reference)
-
     access_op=ReplaceAbsoluteArrayIndexWithStencil.generate_stencil_access(array_reference)
-    array_reference.detach()
-
-    rewriter.insert_op_at_pos(access_op, parent, idx)
+    rewriter.replace_op(array_reference, access_op)
 
 class LoopRangeSearcher():
   def __init__(self, indicies):
@@ -324,12 +321,12 @@ class ApplyStencilRewriter(RewritePattern):
           loop_var_name.traverse(v3.top_loop)
           loop_numeric_bounds={}
           for key, value in loop_var_name.located_loops.items():
-              top_level=ApplyStencilRewriter.get_dag_top_level(value.start.blocks[0].ops[0])
+              top_level=ApplyStencilRewriter.get_dag_top_level(value.start.blocks[0].ops.first)
               from_bound=GetConstantValue(top_level)
-              from_bound.traverse(value.start.blocks[0].ops[0])
+              from_bound.traverse(value.start.blocks[0].ops.first)
 
               to_bound=GetConstantValue(top_level)
-              to_bound.traverse(value.stop.blocks[0].ops[0])
+              to_bound.traverse(value.stop.blocks[0].ops.first)
 
               loop_numeric_bounds[key]=[from_bound.literal, to_bound.literal]
 
@@ -348,7 +345,7 @@ class ApplyStencilRewriter(RewritePattern):
             assign_op=v.assign[unique_var_idx]
           assert assign_op is not None
 
-          rhs=assign_op.rhs.blocks[0].ops[0]
+          rhs=assign_op.rhs.blocks[0].ops.first
           rhs.detach()
 
           if isinstance(rhs, psy_ir.ArrayReference):
@@ -392,7 +389,7 @@ class ApplyStencilRewriter(RewritePattern):
           if deferred is not None: deferred_info_ops.append(deferred)
 
           # For now assume only one result per stencil, hence use same stencil read_vars as input_fields to stencil result
-          stencil_result=psy_stencil.PsyStencil_Result.build(attributes={"out_field": assign_op.lhs.blocks[0].ops[0].var,
+          stencil_result=psy_stencil.PsyStencil_Result.build(attributes={"out_field": assign_op.lhs.blocks[0].ops.first.var,
               "input_fields": ArrayAttr(read_vars), "stencil_ops": ArrayAttr([]),
               "from_bounds": ArrayAttr(lb), "to_bounds": ArrayAttr(ub),
               "min_relative_offset": ArrayAttr(min_indicies), "max_relative_offset": ArrayAttr(max_indicies)}, regions=[[rhs]])
@@ -430,35 +427,31 @@ class ApplyStencilRewriter(RewritePattern):
         visitor.traverse(for_loop)
 
         unique_written_vars={}
-        assignment_to_remove=[]
         for index, written_var in visitor.ordered_writes.items():
           unique_var_idx=unique_written_vars.get(written_var, 0)
           top_loop, assignment_op, stencil_op=self.handle_stencil_for_target(visitor, index, written_var, for_loop, rewriter, unique_var_idx)
           unique_written_vars[written_var]=unique_var_idx+1
           if top_loop is not None and assignment_op is not None and stencil_op is not None:
-            # Detach assignment op and then jam stencil into parent of top loop
-            idx = top_loop.parent.ops.index(top_loop)
-            # Store assignment op and remove later, as unique var idx is keyed on the unmodified DAG
-            # but if remove assignments then will not find the correct one in the handle_stencil_for_target
-            # method
-            assignment_to_remove.append(assignment_op)
-            top_loop.parent.insert_op(stencil_op, idx)
+            # Jam stencil into parent of top loop
+            assignment_op.detach()
+            rewriter.insert_op_before(stencil_op, top_loop)
           else:
             # If one is none, ensure all are
             assert top_loop is None and assignment_op is None and stencil_op is None
-
-        for op in assignment_to_remove:
-          op.detach()
 
         # Now go through and remove any subloops that are empty
         walker = PatternRewriteWalker(GreedyRewritePatternApplier([RemoveEmptyLoops()]), walk_regions_first=True)
         walker.rewrite_module(for_loop)
 
 
-def apply_stencil_analysis(ctx: psy_ir.MLContext, module: ModuleOp) -> ModuleOp:
+@dataclass
+class ApplyStencilAnalysis(ModulePass):
+  """
+  This is the entry point for the transformation pass which will then apply the rewriter
+  """
+  name = 'apply-stencil-analysis'
+
+  def apply(self, ctx: MLContext, input_module: ModuleOp):
     applyStencilRewriter=ApplyStencilRewriter()
     walker = PatternRewriteWalker(GreedyRewritePatternApplier([applyStencilRewriter]), apply_recursively=False)
-    walker.rewrite_module(module)
-
-    #print(1 + "J")
-    return module
+    walker.rewrite_module(input_module)
