@@ -7,6 +7,7 @@ from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, 
 from psy.dialects import psy_ir, psy_stencil #, hpc_gpu
 from xdsl.dialects.experimental import stencil
 from xdsl.dialects.llvm import LLVMPointerType
+from xdsl.passes import ModulePass
 from util.list_ops import flatten
 import uuid
 from ftn.dialects import fir
@@ -140,11 +141,15 @@ class ProgramState:
   def hasGlobalFnName(self, fn_name):
     return fn_name in self.global_fn_names
 
-def psy_ir_to_fir(ctx: MLContext, input_module: ModuleOp):
+@dataclass
+class LowerPsyIR(ModulePass):
+
+  name = 'lower-psy-ir'
+
+  def apply(self, ctx: MLContext, input_module: ModuleOp):
     res_module = translate_program(input_module)
-    # Now we need to gather the containers and inform the top level routine about these so it can generate the use
-    #applyModuleUseToFloatingRegions(res_module, collectContainerNames(res_module))
     res_module.regions[0].move_blocks(input_module.regions[0])
+
     # Create program entry point
     op=get_program_entry_point(input_module)
     if (op.attributes["sym_visibility"].data == "private"):
@@ -153,7 +158,7 @@ def psy_ir_to_fir(ctx: MLContext, input_module: ModuleOp):
     apply_environment_to_module(input_module)
 
 def get_program_entry_point(module: ModuleOp):
-  for op in module.ops:
+  for op in module.regions[0].block.ops:
     if isinstance(op, func.FuncOp):
       if op.sym_name.data=="_QQmain": return op
   assert False, "No program entry point, need a procedure called main"
@@ -172,7 +177,7 @@ def apply_environment_to_module(module: ModuleOp):
     glob=fir.Global.create(attributes={"sym_name": StringAttr("_QQEnvironmentDefaults"),
                                       "symref": SymbolRefAttr("_QQEnvironmentDefaults"),
                                       "type": typ, "constant": UnitAttr()},
-            regions=[Region.from_operation_list(region_args)])
+            regions=[Region([Block(region_args)])])
 
     module.regions[0].blocks[0].add_op(glob)
 
@@ -213,7 +218,7 @@ def translate_program(input_module: ModuleOp) -> ModuleOp:
       block.add_ops([gpu_module])
 
     body.add_block(block)
-    return ModuleOp.from_region_or_ops(body)
+    return ModuleOp(body)
 
 def translate_container(ctx: SSAValueCtx, op: Operation, block, globals_lists) -> Operation:
   program_state = ProgramState()
@@ -235,7 +240,7 @@ def translate_fun_def(ctx: SSAValueCtx,
         var_name = op.attributes.get('var_name')
         assert isinstance(var_name, StringAttr)
         name = var_name.data
-        type_name = op.regions[0].blocks[0].ops[0]
+        type_name = op.regions[0].blocks[0].ops.first
         type = try_translate_type(type_name)
         assert type is not None
         return name, type
@@ -269,7 +274,7 @@ def translate_fun_def(ctx: SSAValueCtx,
       arg_names.append(arg.var_name.data)
       arg_types.append(arg_type)
 
-    block = Block.from_arg_types(arg_types)
+    block = Block(arg_types=arg_types)
 
     for index, arg_name in enumerate(arg_names):
       c[arg_name] = block.args[index]
@@ -301,7 +306,7 @@ def translate_fun_def(ctx: SSAValueCtx,
 
     is_function=not isinstance(routine_def.return_var, psy_ir.EmptyToken)
     if is_function:
-      return_block=Block.from_arg_types([])
+      return_block=Block(arg_types=[])
       load_return_var=fir.Load.create(operands=[c[routine_def.return_var.var_name.data]], result_types=[try_translate_type(routine_def.return_var.type)])
       return_block.add_ops([load_return_var, func.Return.create(operands=[load_return_var.results[0]])])
       program_state.setReturnBlock(return_block)
@@ -585,7 +590,7 @@ def translate_psy_stencil_result(ctx: SSAValueCtx, stencil_result: Operation, pr
 
   c = SSAValueCtx(dictionary=dict(),
                     parent_scope=ctx)
-  block = Block.from_arg_types(block_types)
+  block = Block(arg_types=block_types)
 
   for key, index in block_idx.items():
     c[key]=block.args[index]
@@ -602,7 +607,7 @@ def translate_psy_stencil_result(ctx: SSAValueCtx, stencil_result: Operation, pr
   assert el_type is not None
   rt=stencil.ResultType([el_type])
 
-  return_op=stencil.ReturnOp.get(ops[-1].results[0])
+  return_op=stencil.ReturnOp.get([ops[-1].results[0]])
   ops+=[return_op]
 
   block.add_ops(ops)
@@ -808,11 +813,11 @@ def translate_return(ctx: SSAValueCtx, return_stmt: psy_ir.Return, program_state
 
 def translate_loop(ctx: SSAValueCtx,
                   for_stmt: psy_ir.Loop, program_state : ProgramState) -> List[Operation]:
-    start, start_name = translate_expr(ctx, for_stmt.start.blocks[0].ops[0], program_state)
+    start, start_name = translate_expr(ctx, for_stmt.start.blocks[0].ops.first, program_state)
     conv_start=fir.Convert.create(operands=[start_name], result_types=[IndexType()])
-    stop, stop_name = translate_expr(ctx, for_stmt.stop.blocks[0].ops[0], program_state)
+    stop, stop_name = translate_expr(ctx, for_stmt.stop.blocks[0].ops.first, program_state)
     conv_stop=fir.Convert.create(operands=[stop_name], result_types=[IndexType()])
-    step, step_name = translate_expr(ctx, for_stmt.step.blocks[0].ops[0], program_state)
+    step, step_name = translate_expr(ctx, for_stmt.step.blocks[0].ops.first, program_state)
     conv_step=fir.Convert.create(operands=[step_name], result_types=[IndexType()])
 
     ops: List[Operation] = []
@@ -823,13 +828,13 @@ def translate_loop(ctx: SSAValueCtx,
 
     iterator = ctx[for_stmt.variable.var_name.data]
 
-    block = Block.from_arg_types([IndexType(), i32])
+    block = Block(arg_types=[IndexType(), i32])
     store=fir.Store.create(operands=[block.args[1], iterator])
 
-    add_iteration_count=arith.Addi.get(block.args[0], conv_step)
+    add_iteration_count=arith.Addi(block.args[0], conv_step)
     load_iterator_var=fir.Load.create(operands=[iterator], result_types=[try_translate_type(for_stmt.variable.type)])
     convert_step_for_it=fir.Convert.create(operands=[conv_step.results[0]], result_types=[i32])
-    add_to_iterator=arith.Addi.get(load_iterator_var.results[0], convert_step_for_it.results[0])
+    add_to_iterator=arith.Addi(load_iterator_var.results[0], convert_step_for_it.results[0])
     block_result=fir.Result.create(operands=[add_iteration_count.results[0], add_to_iterator.results[0]])
 
     block.add_ops([store]+ops+[add_iteration_count, load_iterator_var, convert_step_for_it, add_to_iterator, block_result])
@@ -843,7 +848,7 @@ def translate_loop(ctx: SSAValueCtx,
 
 
 def translate_if(ctx: SSAValueCtx, if_stmt: psy_ir.If, program_state : ProgramState) -> List[Operation]:
-    cond, cond_name = translate_expr(ctx, if_stmt.cond.blocks[0].ops[0], program_state)
+    cond, cond_name = translate_expr(ctx, if_stmt.cond.blocks[0].ops.first, program_state)
 
     ops: List[Operation] = []
     for op in if_stmt.then.blocks[0].ops:
@@ -963,7 +968,7 @@ def translate_mpi_bcast_intrinsic_call_expr(ctx: SSAValueCtx,
     program_state.setRequiresMPI(True)
     assert len(call_expr.args.blocks[0].ops) == 3
 
-    ptr_type, buffer_op, buffer_arg = translate_mpi_buffer(ctx, call_expr.args.blocks[0].ops[0], program_state)
+    ptr_type, buffer_op, buffer_arg = translate_mpi_buffer(ctx, call_expr.args.blocks[0].ops.first, program_state)
     convert_buffer=fir.Convert.create(operands=[buffer_arg],
                     result_types=[fir.LLVMPointerType([ptr_type])])
     count_op, count_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[1], program_state)
@@ -1071,7 +1076,7 @@ def translate_mpi_wait_intrinsic_call_expr(ctx: SSAValueCtx,
     assert len(call_expr.args.blocks[0].ops) == 1
 
     to_return=[]
-    request_op, request_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[0], program_state)
+    request_op, request_arg = translate_expr(ctx, call_expr.args.blocks[0].ops.first, program_state)
     if request_op is not None: to_return+=request_op
 
     if isinstance(request_arg.typ, mpi.VectorType):
@@ -1086,13 +1091,21 @@ def translate_mpi_wait_intrinsic_call_expr(ctx: SSAValueCtx,
 
     return to_return
 
+def flatten_ops_to_list(ops):
+    ops_list=[]
+    for op in ops:
+      ops_list.append(op)
+    return ops_list
+
 def translate_mpi_waitall_intrinsic_call_expr(ctx: SSAValueCtx,
                              call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
     program_state.setRequiresMPI(True)
     assert len(call_expr.args.blocks[0].ops) == 2
 
-    request_ops, request_args = translate_expr(ctx, call_expr.args.blocks[0].ops[0], program_state)
-    count_op, count_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[1], program_state)
+    ops_list=flatten_ops_to_list(call_expr.args.blocks[0].ops)
+
+    request_ops, request_args = translate_expr(ctx, ops_list[0], program_state)
+    count_op, count_arg = translate_expr(ctx, ops_list[1], program_state)
     wait_op=mpi.WaitAll.get(request_args, count_arg)
     return count_op + [wait_op]
 
@@ -1104,15 +1117,18 @@ def translate_mpi_send_intrinsic_call_expr(ctx: SSAValueCtx,
       assert len(call_expr.args.blocks[0].ops) == 4
     else:
       assert len(call_expr.args.blocks[0].ops) == 5
-    assert isinstance(call_expr.args.blocks[0].ops[0], psy_ir.ExprName)
 
-    ptr_type, buffer_op, buffer_arg = translate_mpi_buffer(ctx, call_expr.args.blocks[0].ops[0], program_state)
+    ops_list=flatten_ops_to_list(call_expr.args.blocks[0].ops)
+
+    assert isinstance(ops_list[0], psy_ir.ExprName)
+
+    ptr_type, buffer_op, buffer_arg = translate_mpi_buffer(ctx, ops_list[0], program_state)
 
     convert_buffer=fir.Convert.create(operands=[buffer_arg],
                     result_types=[fir.LLVMPointerType([ptr_type])])
-    count_op, count_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[1], program_state)
-    target_op, target_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[2], program_state)
-    tag_op, tag_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[3], program_state)
+    count_op, count_arg = translate_expr(ctx, ops_list[1], program_state)
+    target_op, target_arg = translate_expr(ctx, ops_list[2], program_state)
+    tag_op, tag_arg = translate_expr(ctx, ops_list[3], program_state)
     get_mpi_dtype_op=mpi.GetDtypeOp.get(ptr_type)
 
     result_ops=count_op + target_op + tag_op + [convert_buffer, get_mpi_dtype_op]
@@ -1121,7 +1137,7 @@ def translate_mpi_send_intrinsic_call_expr(ctx: SSAValueCtx,
       mpi_send_op=mpi.Send.get(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], target_arg, tag_arg)
       result_ops.append(mpi_send_op)
     else:
-      request_op, request_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[4], program_state)
+      request_op, request_arg = translate_expr(ctx, ops_list[4], program_state)
       if request_op is not None: result_ops+=request_op
 
       if isinstance(request_arg.typ, mpi.VectorType):
@@ -1143,15 +1159,18 @@ def translate_mpi_recv_intrinsic_call_expr(ctx: SSAValueCtx,
       assert len(call_expr.args.blocks[0].ops) == 4
     else:
       assert len(call_expr.args.blocks[0].ops) == 5
-    assert isinstance(call_expr.args.blocks[0].ops[0], psy_ir.ExprName)
 
-    ptr_type, buffer_op, buffer_arg = translate_mpi_buffer(ctx, call_expr.args.blocks[0].ops[0], program_state)
+    ops_list=flatten_ops_to_list(call_expr.args.blocks[0].ops)
+
+    assert isinstance(ops_list[0], psy_ir.ExprName)
+
+    ptr_type, buffer_op, buffer_arg = translate_mpi_buffer(ctx, ops_list[0], program_state)
 
     convert_buffer=fir.Convert.create(operands=[buffer_arg],
                     result_types=[fir.LLVMPointerType([ptr_type])])
-    count_op, count_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[1], program_state)
-    source_op, source_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[2], program_state)
-    tag_op, tag_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[3], program_state)
+    count_op, count_arg = translate_expr(ctx, ops_list[1], program_state)
+    source_op, source_arg = translate_expr(ctx, ops_list[2], program_state)
+    tag_op, tag_arg = translate_expr(ctx, ops_list[3], program_state)
     get_mpi_dtype_op=mpi.GetDtypeOp.get(ptr_type)
 
     result_ops=count_op + source_op + tag_op + [convert_buffer, get_mpi_dtype_op]
@@ -1160,7 +1179,7 @@ def translate_mpi_recv_intrinsic_call_expr(ctx: SSAValueCtx,
       mpi_recv_op=mpi.Recv.get(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], source_arg, tag_arg)
       result_ops.append(mpi_recv_op)
     else:
-      request_op, request_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[4], program_state)
+      request_op, request_arg = translate_expr(ctx, ops_list[4], program_state)
       if request_op is not None: result_ops+=request_op
 
       if isinstance(request_arg.typ, mpi.VectorType):
@@ -1211,8 +1230,11 @@ def translate_timer_init_intrinsic_call_expr(ctx: SSAValueCtx,
 def translate_timer_start_intrinsic_call_expr(ctx: SSAValueCtx,
                              call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
     assert len(call_expr.args.blocks[0].ops) == 2
-    op_ctrl, arg_ctrl = translate_expr(ctx, call_expr.args.blocks[0].ops[0], program_state)
-    op_desc, arg_desc = translate_expr(ctx, call_expr.args.blocks[0].ops[1], program_state)
+
+    ops_list=flatten_ops_to_list(call_expr.args.blocks[0].ops)
+
+    op_ctrl, arg_ctrl = translate_expr(ctx, ops_list[0], program_state)
+    op_desc, arg_desc = translate_expr(ctx, ops_list[1], program_state)
 
     assert isinstance(arg_ctrl.owner, fir.Load)
     assert arg_ctrl.owner.memref.typ == fir.ReferenceType([i32])
@@ -1238,7 +1260,7 @@ def translate_timer_start_intrinsic_call_expr(ctx: SSAValueCtx,
 def translate_timer_stop_intrinsic_call_expr(ctx: SSAValueCtx,
                              call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
     assert len(call_expr.args.blocks[0].ops) == 1
-    op_ctrl, arg_ctrl = translate_expr(ctx, call_expr.args.blocks[0].ops[0], program_state)
+    op_ctrl, arg_ctrl = translate_expr(ctx, call_expr.args.blocks[0].ops.first, program_state)
 
     assert isinstance(arg_ctrl.owner, fir.Load)
     assert arg_ctrl.owner.memref.typ == fir.ReferenceType([i32])
@@ -1280,7 +1302,7 @@ def translate_print_intrinsic_call_expr(ctx: SSAValueCtx,
         if isinstance(arg.typ.type, fir.IntegerType) or isinstance(arg.typ.type, AnyFloat):
           load_op=fir.Load.create(operands=[arg], result_types=[arg.typ.type])
           print_ops=generatePrintForIntegerOrFloat(program_state, load_op, load_op.results[0], call1.results[0])
-          arg_operands.append(ops[0])
+          arg_operands.append(ops.first)
           arg_operands.extend(print_ops)
         if isinstance(arg.typ.type, fir.CharType):
           # This is a reference to a string
@@ -1344,7 +1366,7 @@ def translate_deallocate_intrinsic_call_expr(ctx: SSAValueCtx,
     if len(call_expr.args.blocks[0].ops) != 1:
       raise Exception(f"For deallocate expected 1 argument but {len(call_expr.args.blocks[0].ops)} are present")
 
-    op, arg = translate_expr(ctx, call_expr.args.blocks[0].ops[0], program_state)
+    op, arg = translate_expr(ctx, call_expr.args.blocks[0].ops.first, program_state)
     # The translate expression unboxes this for us, so we need to look into the operation that does that
     # which is a load, and then grab the origional SSA reference from that argument
     # We use the load initially here to load in the box and unbox it
@@ -1541,7 +1563,7 @@ def unpack_mpi_array(ctx: SSAValueCtx, op: psy_ir.ArrayReference, program_state 
     assert isinstance(ctx[op.var.var_name.data].typ, mpi.VectorType)
     # For now just support one dimensional access here to keep simple
     assert len(op.accessors.blocks[0].ops) == 1
-    expr, ssa=try_translate_expr(ctx, op.accessors.blocks[0].ops[0], program_state)
+    expr, ssa=try_translate_expr(ctx, op.accessors.blocks[0].ops.first, program_state)
 
     access_op=mpi.VectorGetOp.get(ctx[op.var.var_name.data], ssa)
     return expr+[access_op], access_op.results[0]
@@ -1605,7 +1627,7 @@ def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, 
 
     top_level=arg_ssa_list[0]
     for i in range(1, len(arg_ssa_list)):
-      add_op=arith.Addi.get(top_level, arg_ssa_list[i])
+      add_op=arith.Addi(top_level, arg_ssa_list[i])
       expressions.append(add_op)
       top_level=add_op.results[0]
 
@@ -1687,7 +1709,7 @@ def translate_nary_expr(ctx: SSAValueCtx,
 def translate_unary_expr(ctx: SSAValueCtx,
         unary_expr: psy_ir.UnaryOperation, program_state : ProgramState) -> Tuple[List[Operation], SSAValue]:
 
-  expr, expr_ssa_value = translate_expr(ctx, unary_expr.expr.blocks[0].ops[0], program_state)
+  expr, expr_ssa_value = translate_expr(ctx, unary_expr.expr.blocks[0].ops.first, program_state)
 
   attr = unary_expr.op
   assert isinstance(attr, Attribute)
@@ -1751,8 +1773,8 @@ def perform_data_conversion_if_needed(expr_ssa, conv_type):
 def translate_binary_expr(
         ctx: SSAValueCtx,
         binary_expr: psy_ir.BinaryOperation, program_state : ProgramState) -> Tuple[List[Operation], SSAValue]:
-    lhs, lhs_ssa_value = translate_expr(ctx, binary_expr.lhs.blocks[0].ops[0], program_state)
-    rhs, rhs_ssa_value = translate_expr(ctx, binary_expr.rhs.blocks[0].ops[0], program_state)
+    lhs, lhs_ssa_value = translate_expr(ctx, binary_expr.lhs.blocks[0].ops.first, program_state)
+    rhs, rhs_ssa_value = translate_expr(ctx, binary_expr.rhs.blocks[0].ops.first, program_state)
     result_type = lhs_ssa_value.typ
 
     if isinstance(lhs_ssa_value.typ, fir.ReferenceType):
@@ -1805,7 +1827,10 @@ def get_arith_instance(operation:str, lhs, rhs, program_state : ProgramState):
       else:
         raise Exception(f"Could not translate `{lhs.typ}' and '{rhs.typ}' for POW operation")
     assert op_instance is not None, "Operation "+operation+" not implemented for type"
-    return op_instance.get(lhs, rhs)
+    if op_instance == arith.Addi:
+      return op_instance(lhs, rhs)
+    else:
+      return op_instance.get(lhs, rhs)
 
   if (operation == "AND"):
     assert isinstance(operand_type, IntegerType), "Integer type only supported for 'and'"
