@@ -205,9 +205,9 @@ def translate_program(input_module: ModuleOp) -> ModuleOp:
         program_state = ProgramState()
         fn_ops=translate_fun_def(global_ctx, top_level_entry, program_state)
         if program_state.getRequiresMPI():
-          fn_ops.regions[0].blocks[0].insert_op(mpi.Init.build(), 0)
+          fn_ops.regions[0].blocks[0].insert_op_before(mpi.Init.build(), fn_ops.regions[0].blocks[0].first_op)
           # Need to do this to pop finalize before the return at the end of the block
-          fn_ops.regions[0].blocks[0].insert_op(mpi.Finalize.build(), len(fn_ops.regions[0].blocks[0].ops)-1)
+          fn_ops.regions[0].blocks[0].add_op(mpi.Finalize.build())
         block.add_op(fn_ops)
         globals_list.extend(program_state.getGlobals())
 
@@ -409,7 +409,7 @@ def define_derived_var(ctx: SSAValueCtx,
     type_name=var_def.var.type.type.data
     if type_name == "mpi_request":
       constant=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(1, 32)}, result_types=[i32])
-      mpi_request_alloc=mpi.AllocateTypeOp.get(var_name, mpi.RequestType(), constant.results[0])
+      mpi_request_alloc=mpi.AllocateTypeOp.get(mpi.RequestType, constant.results[0], var_name)
       ctx[var_name.data] = mpi_request_alloc.results[0]
       return [constant, mpi_request_alloc]
     else:
@@ -439,7 +439,7 @@ def define_array_var(ctx: SSAValueCtx,
       if type_name == "mpi_request":
         sizes=get_array_sizes(var_def.var.type)
         constant=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(sizes[0], 32)}, result_types=[i32])
-        mpi_request_alloc=mpi.AllocateTypeOp.get(var_name, mpi.RequestType(), constant.results[0])
+        mpi_request_alloc=mpi.AllocateTypeOp.get(mpi.RequestType, constant.results[0], var_name)
         ctx[var_name.data] = mpi_request_alloc.results[0]
         return [constant, mpi_request_alloc]
       else:
@@ -968,12 +968,14 @@ def translate_mpi_bcast_intrinsic_call_expr(ctx: SSAValueCtx,
     program_state.setRequiresMPI(True)
     assert len(call_expr.args.blocks[0].ops) == 3
 
+    ops_list=flatten_ops_to_list(call_expr.args.blocks[0].ops)
+
     ptr_type, buffer_op, buffer_arg = translate_mpi_buffer(ctx, call_expr.args.blocks[0].ops.first, program_state)
     convert_buffer=fir.Convert.create(operands=[buffer_arg],
                     result_types=[fir.LLVMPointerType([ptr_type])])
-    count_op, count_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[1], program_state)
+    count_op, count_arg = translate_expr(ctx, ops_list, program_state)
     get_mpi_dtype_op=mpi.GetDtypeOp.get(ptr_type)
-    root_op, root_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[2], program_state)
+    root_op, root_arg = translate_expr(ctx, ops_list, program_state)
 
     result_ops=count_op + root_op + [convert_buffer, get_mpi_dtype_op]
 
@@ -987,20 +989,22 @@ def translate_mpi_reduce_intrinsic_call_expr(ctx: SSAValueCtx,
                              call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
     program_state.setRequiresMPI(True)
     assert len(call_expr.args.blocks[0].ops) == 5
-    assert isinstance(call_expr.args.blocks[0].ops[3], psy_ir.Literal)
 
-    send_ptr_type, send_buffer_op, send_buffer_arg = translate_mpi_buffer(ctx, call_expr.args.blocks[0].ops[0], program_state)
-    recv_ptr_type, recv_buffer_op, recv_buffer_arg = translate_mpi_buffer(ctx, call_expr.args.blocks[0].ops[1], program_state)
+    ops_list=flatten_ops_to_list(call_expr.args.blocks[0].ops)
+    assert isinstance(ops_list[3], psy_ir.Literal)
+
+    send_ptr_type, send_buffer_op, send_buffer_arg = translate_mpi_buffer(ctx, ops_list[0], program_state)
+    recv_ptr_type, recv_buffer_op, recv_buffer_arg = translate_mpi_buffer(ctx, ops_list[1], program_state)
 
     send_convert_buffer=fir.Convert.create(operands=[send_buffer_arg],
                     result_types=[fir.LLVMPointerType([send_ptr_type])])
     recv_convert_buffer=fir.Convert.create(operands=[recv_buffer_arg],
                     result_types=[fir.LLVMPointerType([recv_ptr_type])])
-    count_op, count_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[2], program_state)
+    count_op, count_arg = translate_expr(ctx, ops_list[2], program_state)
     get_mpi_dtype_op=mpi.GetDtypeOp.get(send_ptr_type) # Do this on the send buffer type
 
-    mpi_op=str_to_mpi_operation[call_expr.args.blocks[0].ops[3].value.data]
-    root_op, root_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[4], program_state)
+    mpi_op=str_to_mpi_operation[ops_list[3].value.data]
+    root_op, root_arg = translate_expr(ctx, ops_list[4], program_state)
 
     result_ops=count_op + root_op + [send_convert_buffer, recv_convert_buffer, get_mpi_dtype_op]
 
@@ -1026,20 +1030,22 @@ def translate_mpi_allreduce_intrinsic_call_expr(ctx: SSAValueCtx,
       count_idx=1
       mpi_op_idx=2
 
-    assert isinstance(call_expr.args.blocks[0].ops[mpi_op_idx], psy_ir.Literal)
+    ops_list=flatten_ops_to_list(call_expr.args.blocks[0].ops)
+
+    assert isinstance(ops_list[mpi_op_idx], psy_ir.Literal)
 
     if has_send_buffer:
-      send_ptr_type, send_buffer_op, send_buffer_arg = translate_mpi_buffer(ctx, call_expr.args.blocks[0].ops[send_buffer_idx], program_state)
+      send_ptr_type, send_buffer_op, send_buffer_arg = translate_mpi_buffer(ctx, ops_list[send_buffer_idx], program_state)
       send_convert_buffer=fir.Convert.create(operands=[send_buffer_arg],
                     result_types=[fir.LLVMPointerType([send_ptr_type])])
 
-    recv_ptr_type, recv_buffer_op, recv_buffer_arg = translate_mpi_buffer(ctx, call_expr.args.blocks[0].ops[recv_buffer_idx], program_state)
+    recv_ptr_type, recv_buffer_op, recv_buffer_arg = translate_mpi_buffer(ctx, ops_list[recv_buffer_idx], program_state)
     recv_convert_buffer=fir.Convert.create(operands=[recv_buffer_arg],
                     result_types=[fir.LLVMPointerType([recv_ptr_type])])
-    count_op, count_arg = translate_expr(ctx, call_expr.args.blocks[0].ops[count_idx], program_state)
+    count_op, count_arg = translate_expr(ctx, ops_list[count_idx], program_state)
     get_mpi_dtype_op=mpi.GetDtypeOp.get(recv_ptr_type) # Do this on the recv buffer type
 
-    mpi_op=str_to_mpi_operation[call_expr.args.blocks[0].ops[mpi_op_idx].value.data]
+    mpi_op=str_to_mpi_operation[ops_list[mpi_op_idx].value.data]
 
     if has_send_buffer:
       result_ops=count_op + [send_convert_buffer, recv_convert_buffer, get_mpi_dtype_op]
@@ -1106,7 +1112,7 @@ def translate_mpi_waitall_intrinsic_call_expr(ctx: SSAValueCtx,
 
     request_ops, request_args = translate_expr(ctx, ops_list[0], program_state)
     count_op, count_arg = translate_expr(ctx, ops_list[1], program_state)
-    wait_op=mpi.WaitAll.get(request_args, count_arg)
+    wait_op=mpi.Waitall.get(request_args, count_arg)
     return count_op + [wait_op]
 
 
@@ -1290,7 +1296,8 @@ def translate_print_intrinsic_call_expr(ctx: SSAValueCtx,
       i32], fir.ReferenceType([IntegerType(8)]))
 
     # Ignore first argument as it will be a star
-    for argument in call_expr.args.blocks[0].ops[1:]:
+    for index, argument in enumerate(call_expr.args.blocks[0].ops):
+      if index == 0: continue
       # For each argument need to issue a different print
       op, arg = translate_expr(ctx, argument, program_state)
       # Now do the actual print
