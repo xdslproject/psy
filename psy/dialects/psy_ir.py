@@ -4,9 +4,9 @@ from dataclasses import dataclass
 from typing import List, Optional, Type, Union
 
 from xdsl.dialects.builtin import IntegerAttr, StringAttr, ArrayAttr, ArrayOfConstraint, AnyAttr, IntAttr, FloatAttr
-from xdsl.ir import Data, MLContext, Operation, ParametrizedAttribute
+from xdsl.ir import Data, MLContext, ParametrizedAttribute
 from xdsl.irdl import (AnyOf, ParameterDef, irdl_attr_definition, irdl_op_definition
-                       , OpAttr, SingleBlockRegion, Region)
+                       , OpAttr, SingleBlockRegion, Region, IRDLOperation)
 from xdsl.parser import Parser
 from xdsl.printer import Printer
 
@@ -123,7 +123,7 @@ class ArrayType(ParametrizedAttribute):
         return ArrayType([shape, referenced_type])
 
 @irdl_op_definition
-class FileContainer(Operation):
+class FileContainer(IRDLOperation):
     name = "psy.ir.filecontainer"
 
     file_name: OpAttr[StringAttr]
@@ -142,7 +142,7 @@ class FileContainer(Operation):
       pass
 
 @irdl_op_definition
-class Container(Operation):
+class Container(IRDLOperation):
     name = "psy.ir.container"
 
     container_name: OpAttr[StringAttr]
@@ -173,7 +173,7 @@ class Container(Operation):
       pass
 
 @irdl_op_definition
-class Import(Operation):
+class Import(IRDLOperation):
     name = "psy.ir.import"
 
     import_name: OpAttr[StringAttr]
@@ -194,7 +194,7 @@ class Import(Operation):
       pass
 
 @irdl_op_definition
-class Routine(Operation):
+class Routine(IRDLOperation):
     name = "psy.ir.routine"
 
     routine_name: OpAttr[StringAttr]
@@ -238,7 +238,7 @@ class Routine(Operation):
       pass
 
 @irdl_op_definition
-class ArrayReference(Operation):
+class ArrayReference(IRDLOperation):
     name="psy.ir.array_reference"
 
     var: OpAttr[AnyAttr()]
@@ -256,7 +256,7 @@ class ArrayReference(Operation):
 
 
 @irdl_op_definition
-class ExprName(Operation):
+class ExprName(IRDLOperation):
     name = "psy.ir.id_expr"
 
     id: OpAttr[StringAttr]
@@ -278,7 +278,7 @@ class StructureMember(ParametrizedAttribute):
   children : ParameterDef[AnyOf([AnyAttr(), EmptyAttr])]
 
 @irdl_op_definition
-class StructureReference(Operation):
+class StructureReference(IRDLOperation):
     name = "psy.ir.structure_reference"
 
     var: OpAttr[AnyAttr()]
@@ -304,7 +304,7 @@ class EmptyToken(EmptyAttr):
     name = "psy.ir.emptytoken"
 
 @irdl_op_definition
-class VarDef(Operation):
+class VarDef(IRDLOperation):
     name = "psy.ir.var_def"
 
     var: OpAttr[AnyAttr()]
@@ -330,7 +330,7 @@ class VarDef(Operation):
       pass
 
 @irdl_op_definition
-class Assign(Operation):
+class Assign(IRDLOperation):
     name = "psy.ir.assign"
 
     lhs: Region
@@ -350,7 +350,7 @@ class Assign(Operation):
       pass
 
 @irdl_op_definition
-class Literal(Operation):
+class Literal(IRDLOperation):
     name = "psy.ir.literal"
 
     value: OpAttr[AnyOf([StringAttr, IntegerAttr, FloatAttr])]
@@ -373,7 +373,7 @@ class Literal(Operation):
         return res
 
 @irdl_op_definition
-class IfBlock(Operation):
+class IfBlock(IRDLOperation):
     name = "psy.ir.ifblock"
 
     cond: Region
@@ -395,7 +395,7 @@ class IfBlock(Operation):
       pass
 
 @irdl_op_definition
-class Loop(Operation):
+class Loop(IRDLOperation):
     name = "psy.ir.loop"
 
     variable: OpAttr[AnyAttr()]
@@ -421,11 +421,11 @@ class Loop(Operation):
       pass
 
 @irdl_op_definition
-class Return(Operation):
+class Return(IRDLOperation):
     name = "psy.ir.return"
 
 @irdl_op_definition
-class BinaryOperation(Operation):
+class BinaryOperation(IRDLOperation):
     name = "psy.ir.binaryoperation"
 
     op: OpAttr[StringAttr]
@@ -465,7 +465,7 @@ class BinaryOperation(Operation):
       pass
 
 @irdl_op_definition
-class UnaryOperation(Operation):
+class UnaryOperation(IRDLOperation):
     name = "psy.ir.unaryoperation"
 
     op: OpAttr[StringAttr]
@@ -499,7 +499,7 @@ class UnaryOperation(Operation):
       pass
 
 @irdl_op_definition
-class NaryOperation(Operation):
+class NaryOperation(IRDLOperation):
     name = "psy.ir.naryoperation"
 
     op: OpAttr[StringAttr]
@@ -523,7 +523,7 @@ class NaryOperation(Operation):
       pass
 
 @irdl_op_definition
-class Range(Operation):
+class Range(IRDLOperation):
     name = "psy.ir.range"
 
     start: Region
@@ -546,7 +546,7 @@ class Range(Operation):
       pass
 
 @irdl_op_definition
-class CallExpr(Operation):
+class CallExpr(IRDLOperation):
     name = "psy.ir.call_expr"
 
     func: OpAttr[StringAttr]
