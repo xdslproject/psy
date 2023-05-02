@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import List, Optional, Type, Union
-
+from util.list_ops import flatten
 from xdsl.dialects.builtin import IntegerAttr, StringAttr, ArrayAttr, ArrayOfConstraint, AnyAttr, IntAttr, FloatAttr
 from xdsl.ir import Data, MLContext, ParametrizedAttribute, Dialect
 from xdsl.irdl import (AnyOf, ParameterDef, irdl_attr_definition, irdl_op_definition
-                       , OpAttr, SingleBlockRegion, Region, IRDLOperation)
+                       , OpAttr, SingleBlockRegion, Region, Block, IRDLOperation)
 from xdsl.parser import Parser
 from xdsl.printer import Printer
 
@@ -385,7 +385,7 @@ class IfBlock(IRDLOperation):
             then: List[Operation],
             orelse: List[Operation],
             verify_op: bool = True) -> If:
-        res = IfBlock.build(regions=[[cond], Region.from_operation_list(then), Region.from_operation_list(orelse)])
+        res = IfBlock.build(regions=[Region([Block([cond])]), Region([Block(flatten(then))]), Region([Block(flatten(orelse))])])
         if verify_op:
             # We don't verify nested operations since they might have already been verified
             res.verify(verify_nested_ops=False)
@@ -535,8 +535,8 @@ class Range(IRDLOperation):
             stop: List[Operation],
             step: List[Operation],
             verify_op: bool = True) -> CallExpr:
-        res = Range.build(regions=[Region.from_operation_list(start), Region.from_operation_list(stop),
-                Region.from_operation_list(step)])
+        res = Range.build(regions=[Region(Block(flatten(start))), Region(Block(flatten(stop))),
+                Region(Block(flatten(step)))])
         if verify_op:
             # We don't verify nested operations since they might have already been verified
             res.verify(verify_nested_ops=False)
@@ -560,7 +560,7 @@ class CallExpr(IRDLOperation):
             type:EmptyAttr =EmptyAttr(),
             intrinsic: bool=False,
             verify_op: bool = True) -> CallExpr:
-        res = CallExpr.build(regions=[Region.from_operation_list(args)], attributes={"func": StringAttr(func), "type": type, "intrinsic": BoolAttr(intrinsic)})
+        res = CallExpr.build(regions=[Region(Block(args))], attributes={"func": StringAttr(func), "type": type, "intrinsic": BoolAttr(intrinsic)})
         if verify_op:
             # We don't verify nested operations since they might have already been verified
             res.verify(verify_nested_ops=False)
