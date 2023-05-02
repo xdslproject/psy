@@ -41,7 +41,7 @@ class _StencilExtractorRewriteBase(RewritePattern, ABC):
       else:
         input_types_translated.append(typ)
 
-    block = Block.from_arg_types(input_types_translated)
+    block = Block(arg_types=input_types_translated)
     block.add_ops(operations)
     block.add_op(func.Return.get())
     body=Region()
