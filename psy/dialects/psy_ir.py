@@ -385,7 +385,7 @@ class IfBlock(IRDLOperation):
             then: List[Operation],
             orelse: List[Operation],
             verify_op: bool = True) -> If:
-        res = IfBlock.build(regions=[[cond], then, orelse])
+        res = IfBlock.build(regions=[[cond], Region.from_operation_list(then), Region.from_operation_list(orelse)])
         if verify_op:
             # We don't verify nested operations since they might have already been verified
             res.verify(verify_nested_ops=False)

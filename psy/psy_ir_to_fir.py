@@ -1815,7 +1815,7 @@ def get_arith_instance(operation:str, lhs, rhs, program_state : ProgramState):
     return arith.OrI.get(lhs, rhs)
 
   if operation in binary_arith_psy_to_arith_comparison_op:
-    return arith.Cmpi.from_mnemonic(lhs, rhs, binary_arith_psy_to_arith_comparison_op[operation])
+    return arith.Cmpi.get(lhs, rhs, binary_arith_psy_to_arith_comparison_op[operation])
 
   raise Exception(f"Unable to handle arithmetic instance `{operation}`")
 
