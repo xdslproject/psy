@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Type, Union
 
 from xdsl.dialects.builtin import IntegerAttr, StringAttr, ArrayAttr, ArrayOfConstraint, AnyAttr, IntAttr, FloatAttr
-from xdsl.ir import Data, MLContext, ParametrizedAttribute
+from xdsl.ir import Data, MLContext, ParametrizedAttribute, Dialect
 from xdsl.irdl import (AnyOf, ParameterDef, irdl_attr_definition, irdl_op_definition
                        , OpAttr, SingleBlockRegion, Region, IRDLOperation)
 from xdsl.parser import Parser
@@ -61,6 +61,17 @@ class NamedType(ParametrizedAttribute):
 
     def set_precision(self, precision):
       self.parameters[2]=precision
+
+@irdl_attr_definition
+class StructureMember(ParametrizedAttribute):
+  name = "psy.ir.structure_member"
+
+  member_name : ParameterDef[StringAttr]
+  children : ParameterDef[AnyOf([AnyAttr(), EmptyAttr])]
+
+@irdl_attr_definition
+class EmptyToken(EmptyAttr):
+    name = "psy.ir.emptytoken"
 
 @irdl_attr_definition
 class AnonymousAttr(ParametrizedAttribute):
@@ -121,6 +132,13 @@ class ArrayType(ParametrizedAttribute):
         referenced_type: Attribute,
         shape: ArrayAttr) -> ArrayType:
         return ArrayType([shape, referenced_type])
+
+@irdl_attr_definition
+class Token(ParametrizedAttribute):
+    name = "psy.ir.token"
+
+    var_name : ParameterDef[StringAttr]
+    type : ParameterDef[AnyOf([NamedType, DerivedType, ArrayType])]
 
 @irdl_op_definition
 class FileContainer(IRDLOperation):
@@ -270,13 +288,6 @@ class ExprName(IRDLOperation):
             res.verify(verify_nested_ops=False)
         return res
 
-@irdl_attr_definition
-class StructureMember(ParametrizedAttribute):
-  name = "psy.ir.structure_member"
-
-  member_name : ParameterDef[StringAttr]
-  children : ParameterDef[AnyOf([AnyAttr(), EmptyAttr])]
-
 @irdl_op_definition
 class StructureReference(IRDLOperation):
     name = "psy.ir.structure_reference"
@@ -291,17 +302,6 @@ class StructureReference(IRDLOperation):
             # We don't verify nested operations since they might have already been verified
             res.verify(verify_nested_ops=False)
         return res
-
-@irdl_attr_definition
-class Token(ParametrizedAttribute):
-    name = "psy.ir.token"
-
-    var_name : ParameterDef[StringAttr]
-    type : ParameterDef[AnyOf([NamedType, DerivedType, ArrayType])]
-
-@irdl_attr_definition
-class EmptyToken(EmptyAttr):
-    name = "psy.ir.emptytoken"
 
 @irdl_op_definition
 class VarDef(IRDLOperation):
@@ -569,59 +569,35 @@ class CallExpr(IRDLOperation):
     def verify_(self) -> None:
       pass
 
-@dataclass
-class psyIR:
-    ctx: MLContext
-
-    def __post_init__(self):
-        self.ctx.register_attr(BoolAttr)
-        self.ctx.register_attr(AnonymousAttr)
-        self.ctx.register_attr(DeferredAttr)
-        self.ctx.register_attr(EmptyAttr)
-        self.ctx.register_attr(AssumedSizeAttr)
-        self.ctx.register_attr(DerivedType)
-        self.ctx.register_attr(NamedType)
-        self.ctx.register_attr(ArrayType)
-        self.ctx.register_attr(Token)
-        self.ctx.register_attr(EmptyToken)
-        self.ctx.register_attr(StructureMember)
-
-        self.ctx.register_op(FileContainer)
-        self.ctx.register_op(Container)
-        self.ctx.register_op(Routine)
-        self.ctx.register_op(Import)
-        self.ctx.register_op(Return)
-        self.ctx.register_op(VarDef)
-        self.ctx.register_op(Assign)
-        self.ctx.register_op(IfBlock)
-        self.ctx.register_op(Loop)
-        self.ctx.register_op(Literal)
-        self.ctx.register_op(ExprName)
-        self.ctx.register_op(ArrayReference)
-        self.ctx.register_op(StructureReference)
-        self.ctx.register_op(BinaryOperation)
-        self.ctx.register_op(UnaryOperation)
-        self.ctx.register_op(NaryOperation)
-        self.ctx.register_op(Range)
-        self.ctx.register_op(CallExpr)
-
-    @staticmethod
-    def get_type(annotation: str) -> Operation:
-        return TypeName.get(annotation)
-
-    @staticmethod
-    def get_statement_op_types() -> List[Type[Operation]]:
-        statements: List[Type[Operation]] = [
-            Assign, If, Do
-        ]
-        return statements + psyIR.get_expression_op_types()
-
-    @staticmethod
-    def get_expression_op_types() -> List[Type[Operation]]:
-        return [
-            BinaryExpr, CallExpr, Literal, ExprName, MemberAccess, ArrayAccess
-        ]
-
-    @staticmethod
-    def get_type_op_types() -> List[Type[Operation]]:
-        return []
+psyIR = Dialect([
+    FileContainer,
+    Container,
+    Routine,
+    Import,
+    Return,
+    VarDef,
+    Assign,
+    IfBlock,
+    Loop,
+    Literal,
+    ExprName,
+    ArrayReference,
+    StructureReference,
+    BinaryOperation,
+    UnaryOperation,
+    NaryOperation,
+    Range,
+    CallExpr,
+], [
+    BoolAttr,
+    AnonymousAttr,
+    DeferredAttr,
+    EmptyAttr,
+    AssumedSizeAttr,
+    DerivedType,
+    NamedType,
+    ArrayType,
+    Token,
+    EmptyToken,
+    StructureMember,
+])
