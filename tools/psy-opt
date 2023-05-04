@@ -34,7 +34,6 @@ class PsyOptMain(xDSLOptMain):
 
     def register_all_targets(self):
         super().register_all_targets()
-        self.available_targets['both'] = self.available_targets['xdsl']
 
     def setup_pipeline(self):
       super().setup_pipeline()
@@ -44,7 +43,7 @@ class PsyOptMain(xDSLOptMain):
         """Register all dialects that can be used."""
         self.ctx.register_dialect(psyIR)
         self.ctx.register_dialect(psyStencil)
-        self.ctx.register_dialect(FIR)        
+        self.ctx.register_dialect(FIR)
 
     @staticmethod
     def get_passes_as_dict(
@@ -79,6 +78,8 @@ class PsyOptMain(xDSLOptMain):
 def _output_modules_to_file_for_target(module, target, psy_main):
   psy_main.args.target=target
   i=0
+  # This will generate output for every sub module that is part of the
+  # top level module
   for op in module.regions[0].blocks[0].ops:
     if isinstance(op, ModuleOp):
       module_contents=psy_main.output_resulting_program(op)
@@ -110,15 +111,10 @@ def __main__():
 
     _empty_generate_dir()
 
-    if psy_main.args.target != "both":
-      contents = psy_main.output_resulting_program(module)
-      psy_main.print_to_output_stream(contents)
+    contents = psy_main.output_resulting_program(module)
+    psy_main.print_to_output_stream(contents)
 
-      _output_modules_to_file_for_target(module, psy_main.args.target, psy_main)
-    else:
-      _output_modules_to_file_for_target(module, "xdsl", psy_main)
-      _output_modules_to_file_for_target(module, "mlir", psy_main)
-
+    _output_modules_to_file_for_target(module, psy_main.args.target, psy_main)
 
 
 if __name__ == "__main__":
