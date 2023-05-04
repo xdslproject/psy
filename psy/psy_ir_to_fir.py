@@ -464,7 +464,7 @@ def define_array_var(ctx: SSAValueCtx,
         region_args=[zero_bits, zero_val, shape, embox, has_val]
 
         glob=fir.Global.create(attributes={"linkName": StringAttr("internal"), "sym_name": StringAttr("_QFE"+var_name.data), "symref": SymbolRefAttr("_QFE"+var_name.data), "type": type},
-            regions=[Region.from_operation_list(region_args)])
+            regions=[Region([Block(region_args)])])
         addr_lookup=fir.AddressOf.create(attributes={"symbol": SymbolRefAttr("_QFE"+var_name.data)}, result_types=[fir.ReferenceType([type])])
         program_state.appendToGlobal(glob)
         ctx[var_name.data] = addr_lookup.results[0]
@@ -795,11 +795,11 @@ def translate_gpu_loop(ctx: SSAValueCtx, gpu_stmt: Operation, program_state : Pr
   ops.append(gpu.ReturnOp.create())
 
   # For now empty block arguments, will be values in and out
-  body = Region.from_operation_list(ops)
+  body = Region([Block(ops)])
   gpu_fn=gpu.GPUFuncOp.from_region("gpu_fn_"+str(program_state.getNumGPUFns()), [], [], body)
   end_op=gpu.ModuleEndOp.create()
   if gpu_module is None:
-    gpu_module=gpu.GPUModuleOp.from_region(Region.from_operation_list([gpu_fn, end_op]), "gpu_functions")
+    gpu_module=gpu.GPUModuleOp.from_region(Region([Block([gpu_fn, end_op])]), "gpu_functions")
   else:
     pass # Need to add in ability to append GPU function here
 
@@ -855,14 +855,14 @@ def translate_if(ctx: SSAValueCtx, if_stmt: psy_ir.If, program_state : ProgramSt
         stmt_ops = translate_stmt(ctx, op, program_state)
         ops += stmt_ops
     ops.append(fir.Result.create())
-    then = Region.from_operation_list(ops)
+    then = Region([Block(ops)])
 
     ops: List[Operation] = []
     for op in if_stmt.orelse.blocks[0].ops:
         stmt_ops = translate_stmt(ctx, op, program_state)
         ops += stmt_ops
     ops.append(fir.Result.create())
-    orelse = Region.from_operation_list(ops)
+    orelse = Region([Block(ops)])
 
     new_op = fir.If.create(operands=[cond_name], regions=[then, orelse])
     return cond + [new_op]
@@ -1876,7 +1876,7 @@ def generate_string_literal(string, program_state : ProgramState) -> Operation:
     has_val_op=fir.HasValue.create(operands=[string_lit_op.results[0]])
     str_uuid=uuid.uuid4().hex.upper()
     glob=fir.Global.create(attributes={"linkName": StringAttr("linkonce"), "sym_name": StringAttr("_QQcl."+str_uuid), "symref": SymbolRefAttr("_QQcl."+str_uuid), "type": typ},
-      regions=[Region.from_operation_list([string_lit_op, has_val_op])])
+      regions=[Region([Block([string_lit_op, has_val_op])])])
     program_state.appendToGlobal(glob)
     ref_type=fir.ReferenceType([typ])
     addr_lookup=fir.AddressOf.create(attributes={"symbol": SymbolRefAttr("_QQcl."+str_uuid)}, result_types=[ref_type])
