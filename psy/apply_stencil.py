@@ -23,7 +23,7 @@ class GetAllocateSizes(Visitor):
 
   def traverse_call_expr(self, call_expr: psy_ir.CallExpr):
     if call_expr.func.data.upper() == "ALLOCATE":
-      target_var=call_expr.args.blocks[0].ops[0]
+      target_var=call_expr.args.blocks[0].ops.first
       if target_var.var.var_name.data == self.var_name:
         for index, node in enumerate(call_expr.args.blocks[0].ops):
           if index == 0: continue
@@ -241,7 +241,6 @@ class ReplaceAbsoluteArrayIndexWithStencil(RewritePattern):
   @op_type_rewrite_pattern
   def match_and_rewrite(
             self, array_reference: psy_ir.ArrayReference, rewriter: PatternRewriter):
-
     access_op=ReplaceAbsoluteArrayIndexWithStencil.generate_stencil_access(array_reference)
     rewriter.replace_op(array_reference, access_op)
 
@@ -430,14 +429,17 @@ class ApplyStencilRewriter(RewritePattern):
         for index, written_var in visitor.ordered_writes.items():
           unique_var_idx=unique_written_vars.get(written_var, 0)
           top_loop, assignment_op, stencil_op=self.handle_stencil_for_target(visitor, index, written_var, for_loop, rewriter, unique_var_idx)
-          unique_written_vars[written_var]=unique_var_idx+1
+          # We are tracking the unique variable index here, which is the instance of this specific target variable name. However,
+          # if there is a replacement with a stencil, then we do not increment as that origional assignment is removed so it won't
+          # be visible to subsequent ones. If the assignment is not replaced then we increment it, as want to go to the next one
           if top_loop is not None and assignment_op is not None and stencil_op is not None:
             # Jam stencil into parent of top loop
             assignment_op.detach()
-            rewriter.insert_op_before(stencil_op, top_loop)
+            top_loop.parent.insert_op_before(stencil_op, top_loop)
           else:
             # If one is none, ensure all are
             assert top_loop is None and assignment_op is None and stencil_op is None
+            unique_written_vars[written_var]=unique_var_idx+1
 
         # Now go through and remove any subloops that are empty
         walker = PatternRewriteWalker(GreedyRewritePatternApplier([RemoveEmptyLoops()]), walk_regions_first=True)
