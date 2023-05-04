@@ -206,8 +206,9 @@ def translate_program(input_module: ModuleOp) -> ModuleOp:
         fn_ops=translate_fun_def(global_ctx, top_level_entry, program_state)
         if program_state.getRequiresMPI():
           fn_ops.regions[0].blocks[0].insert_op_before(mpi.Init.build(), fn_ops.regions[0].blocks[0].first_op)
-          # Need to do this to pop finalize before the return at the end of the block
-          fn_ops.regions[0].blocks[0].add_op(mpi.Finalize.build())
+          # Need to do this to pop finalize before the return at the end of the block, hence insert
+          # before the last operation
+          fn_ops.regions[0].blocks[0].insert_op_before(mpi.Finalize.build(), fn_ops.regions[0].blocks[0].last_op)
         block.add_op(fn_ops)
         globals_list.extend(program_state.getGlobals())
 
