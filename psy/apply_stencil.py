@@ -223,6 +223,18 @@ class RemoveEmptyLoops(RewritePattern):
       if len(for_loop.body.blocks[0].ops) == 0:
         for_loop.detach()
 
+class ReplaceStencilDimensionVarWithStencilIndex(RewritePattern):
+  def __init__(self, loop_indicies):
+    self.loop_indicies=loop_indicies
+
+  @op_type_rewrite_pattern
+  def match_and_rewrite(
+            self, var_reference: psy_ir.ExprName, rewriter: PatternRewriter):
+    if var_reference.var.var_name.data in self.loop_indicies:
+      idx_op=psy_stencil.PsyStencil_DimIndex.build(attributes={"index": IntAttr(self.loop_indicies.index(var_reference.var.var_name.data)),
+        "original_type": var_reference.var.type})
+      rewriter.replace_op(var_reference, idx_op)
+
 class ReplaceAbsoluteArrayIndexWithStencil(RewritePattern):
 
   def generate_stencil_access(array_reference):
@@ -297,7 +309,7 @@ class ApplyStencilRewriter(RewritePattern):
               v2.traverse(idx)
               access_variables.extend(v2.array_indexes)
 
-        if len(access_variables) == 0: return None, None, None
+        #if len(access_variables) == 0: return None, None, None
 
         written_var=visitor.written_variables[target_var_name][unique_var_idx]
 
@@ -307,6 +319,10 @@ class ApplyStencilRewriter(RewritePattern):
         for idx in written_var.accessors.blocks[0].ops:
           v2=CollectArrayVariableIndexes()
           v2.traverse(idx)
+          if target_var_name not in visitor.written_to_read:
+            # If target var is not a read variable then add the indexes
+            # to access_variables, as we care about these
+            access_variables.extend(v2.array_indexes)
           index_variable_names.extend(v2.array_indexes)
 
         v3=LoopRangeSearcher(access_variables)
@@ -328,7 +344,6 @@ class ApplyStencilRewriter(RewritePattern):
               to_bound.traverse(value.stop.blocks[0].ops.first)
 
               loop_numeric_bounds[key]=[from_bound.literal, to_bound.literal]
-
 
           loop_body=v3.bottom_loop.body.blocks[0].ops
 
@@ -354,6 +369,16 @@ class ApplyStencilRewriter(RewritePattern):
             walker = PatternRewriteWalker(GreedyRewritePatternApplier([replaceArrayIndexWithStencil]), apply_recursively=False)
             walker.rewrite_module(rhs)
 
+          # Remove loop variables from the read vars, as these are stencil dimension index lookups
+          to_remove=[]
+          for var in read_vars:
+            if var.var_name.data in index_variable_names: to_remove.append(var)
+          for tr in to_remove: read_vars.remove(tr)
+
+          replaceDimVarWithIndex=ReplaceStencilDimensionVarWithStencilIndex(index_variable_names)
+          walker=PatternRewriteWalker(GreedyRewritePatternApplier([replaceDimVarWithIndex]), apply_recursively=False)
+          walker.rewrite_module(rhs)
+
           min_indicies=[]
           max_indicies=[]
 
@@ -370,8 +395,6 @@ class ApplyStencilRewriter(RewritePattern):
           lb=ApplyStencilRewriter.build_bounds(index_variable_names, loop_numeric_bounds, 0)
           ub=ApplyStencilRewriter.build_bounds(index_variable_names, loop_numeric_bounds, 1)
 
-          assert len(min_indicies) == len(lb)
-          assert len(max_indicies) == len(ub)
           assert len(lb) == len(ub)
           assert len(min_indicies) == len(max_indicies)
 
