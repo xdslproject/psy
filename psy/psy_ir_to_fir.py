@@ -743,9 +743,10 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
       load_op=stencil.LoadOp.get(cast_op.results[0])
       ops+=[cast_op, load_op]
       new_ctx[field.var_name.data]=load_op.results[0]
-    else:
-      # Not yet implemented
-      assert False
+    elif isinstance(field.type, psy_ir.NamedType):
+      # This is a scalar and simply set outside the stencil loop and used in here
+      # therefore include the context of this but don't need to do anything else
+      new_ctx[field.var_name.data]=ctx[field.var_name.data]
 
   output_field_cast_op=None
 
