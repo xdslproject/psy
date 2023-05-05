@@ -1779,14 +1779,17 @@ def get_expression_conversion_type(lhs_type, rhs_type):
       if lhs_type.width.data > rhs_type.width.data: return None, lhs_type
       if lhs_type.width.data < rhs_type.width.data: return rhs_type, None
       return None, None
-    return rhs_type, None # assuming it is float, so we will convert lhs to this
+    elif isinstance(rhs_type, Float16Type) or isinstance(rhs_type, Float32Type) or isinstance(rhs_type, Float64Type):
+      return rhs_type, None
+    else:
+      return None, None
   if isinstance(lhs_type, Float16Type):
     if isintance(rhs_type, Float32Type) or isintance(rhs_type, Float64Type): return rhs_type, None
   if isinstance(lhs_type, Float32Type):
-    if isinstance(rhs_type, Float16Type): return None, lhs_type
+    if isinstance(rhs_type, Float16Type) or isinstance(rhs_type, IntegerType): return None, lhs_type
     if isinstance(rhs_type, Float64Type): return rhs_type, None
   if isinstance(lhs_type, Float64Type):
-    if isinstance(rhs_type, Float16Type) or isinstance(rhs_type, Float32Type): return None, lhs_type,
+    if isinstance(rhs_type, Float16Type) or isinstance(rhs_type, Float32Type) or isinstance(rhs_type, IntegerType): return None, lhs_type,
   return None, None
 
 def perform_data_conversion_if_needed(expr_ssa, conv_type):
