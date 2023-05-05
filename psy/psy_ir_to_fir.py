@@ -644,7 +644,8 @@ def translate_psy_stencil_result(ctx: SSAValueCtx, stencil_result: Operation, pr
 
   lb=stencil.IndexAttr.get(*lb_ints)
   ub=stencil.IndexAttr.get(*ub_ints)
-  apply_op=stencil.ApplyOp.get(block_ops, block, el_type, len(array_sizes), lb, ub)
+  stencil_temptype=stencil.TempType.from_shape([-1] * len(array_sizes), el_type)
+  apply_op=stencil.ApplyOp.get(block_ops, block, [stencil_temptype], lb, ub)
 
   return [apply_op]
 
@@ -740,7 +741,7 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
         ops+=[external_load_op]
       cast_op=stencil.CastOp.get(external_load_op.results[0], lb, ub, external_load_op.results[0].typ)
       input_cast_ops[field.var_name.data]=cast_op
-      load_op=stencil.LoadOp.get(cast_op.results[0])
+      load_op=stencil.LoadOp.get(cast_op.results[0], lb, ub)
       ops+=[cast_op, load_op]
       new_ctx[field.var_name.data]=load_op.results[0]
     elif isinstance(field.type, psy_ir.NamedType):
@@ -751,35 +752,31 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
   output_field_cast_op=None
 
   for field in stencil_stmt.output_fields.data:
-    if not field.var_name.data in new_ctx.dictionary.keys():
-      assert isinstance(field.type, psy_ir.ArrayType)
-      num_deferred=field.type.get_num_deferred_dim()
-      # Ensure either no dimensions are deferred or they all are
-      assert num_deferred == 0 or num_deferred == field.type.get_num_dims()
-      if num_deferred == 0:
-        array_sizes=get_array_sizes(field.type)
-      else:
-        array_sizes=interogate_stencil_field_inference_sizes(field.var_name.data, stencil_stmt.body.blocks[0].ops)
-
-      lb=stencil.IndexAttr.get(*([0]*len(array_sizes)))
-      ub=stencil.IndexAttr.get(*[v for v in array_sizes])
-      el_type=try_translate_type(field.type.element_type)
-      if num_deferred > 0:
-        # Use an unrealized conversion to pop in the array size information here
-        in_type=ctx[field.var_name.data].typ
-        explicit_size_type=rebuild_deferred_fir_array_with_bounds(in_type, array_sizes)
-        unreconciled_conv_op=UnrealizedConversionCastOp.create(operands=[ctx[field.var_name.data]], result_types=[explicit_size_type])
-        external_load_op=stencil.ExternalLoadOp.get(unreconciled_conv_op.results[0], stencil.FieldType.from_shape(array_sizes, el_type))
-        ops+=[unreconciled_conv_op, external_load_op]
-      else:
-        external_load_op=stencil.ExternalLoadOp.get(ctx[field.var_name.data], stencil.FieldType.from_shape(array_sizes, el_type))
-        ops+=[external_load_op]
-      output_field_cast_op=stencil.CastOp.get(external_load_op.results[0], lb, ub, external_load_op.results[0].typ)
-      load_op=stencil.LoadOp.get(output_field_cast_op.results[0])
-      ops+=[output_field_cast_op, load_op]
-      new_ctx[field.var_name.data]=load_op.results[0]
+    assert isinstance(field.type, psy_ir.ArrayType)
+    num_deferred=field.type.get_num_deferred_dim()
+    # Ensure either no dimensions are deferred or they all are
+    assert num_deferred == 0 or num_deferred == field.type.get_num_dims()
+    if num_deferred == 0:
+      array_sizes=get_array_sizes(field.type)
     else:
-      output_field_cast_op=input_cast_ops[field.var_name.data]
+      array_sizes=interogate_stencil_field_inference_sizes(field.var_name.data, stencil_stmt.body.blocks[0].ops)
+
+    lb=stencil.IndexAttr.get(*([0]*len(array_sizes)))
+    ub=stencil.IndexAttr.get(*[v for v in array_sizes])
+    el_type=try_translate_type(field.type.element_type)
+    if num_deferred > 0:
+      # Use an unrealized conversion to pop in the array size information here
+      in_type=ctx[field.var_name.data].typ
+      explicit_size_type=rebuild_deferred_fir_array_with_bounds(in_type, array_sizes)
+      unreconciled_conv_op=UnrealizedConversionCastOp.create(operands=[ctx[field.var_name.data]], result_types=[explicit_size_type])
+      external_load_op=stencil.ExternalLoadOp.get(unreconciled_conv_op.results[0], stencil.FieldType.from_shape(array_sizes, el_type))
+      ops+=[unreconciled_conv_op, external_load_op]
+    else:
+      external_load_op=stencil.ExternalLoadOp.get(ctx[field.var_name.data], stencil.FieldType.from_shape(array_sizes, el_type))
+      ops+=[external_load_op]
+    output_field_cast_op=stencil.CastOp.get(external_load_op.results[0], lb, ub, external_load_op.results[0].typ)
+    ops+=[output_field_cast_op]
+    new_ctx[field.var_name.data]=output_field_cast_op.results[0]
 
   for op in stencil_stmt.body.blocks[0].ops:
     if not isinstance(op, psy_stencil.PsyStencil_DeferredArrayInfo):
