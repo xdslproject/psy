@@ -226,6 +226,7 @@ class RemoveEmptyLoops(RewritePattern):
 class ReplaceStencilDimensionVarWithStencilIndex(RewritePattern):
   def __init__(self, loop_indicies):
     self.loop_indicies=loop_indicies
+    self.loop_indicies.reverse()
 
   @op_type_rewrite_pattern
   def match_and_rewrite(
