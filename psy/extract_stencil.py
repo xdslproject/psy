@@ -75,14 +75,14 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
             idx=index
             break
         assert idx is not None
-        #parent_op.ops.index(op)
+
         if idx > 0 and isinstance(op_list[idx-1], builtin.UnrealizedConversionCastOp):
           # We do this to catch any unrealized conversion cast that preceeds the first external load
           # this will be detached later on, but needs to be in the extracted function to do so
           idx-=1
         stencil_ops=[]
         ops_to_load_in=[]
-        for index, op in enumerate(parent_op.ops): #range(idx, len(op.parent.ops)):
+        for index, op in enumerate(parent_op.ops):
           if index < idx: continue
           stencil_ops.append(op_list[index])
           if isinstance(op_list[index], stencil.ExternalLoadOp):
@@ -160,7 +160,8 @@ class AddExternalFuncDefs(RewritePattern):
                 [res.typ for res in op.results],
             )
 
-        module.walk(walker)
+        for o in module.walk():
+            walker(o)
 
         # for each func found, add a FuncOp to the top of the module.
         for name, types in funcs_to_emit.items():
@@ -259,7 +260,10 @@ class ConnectExternalLoadToFunctionInput(RewritePattern):
       idx-=1
 
     block=op.parent
-    block.insert_ops_before(ops_to_add, op_list[idx])
+    if idx > 0:
+      block.insert_ops_before(ops_to_add, op_list[idx])
+    else:
+      block.insert_ops_before(ops_to_add, block.first_op)
 
     op.operands=[unrealised_conv_cast_op.results[0]]
 
