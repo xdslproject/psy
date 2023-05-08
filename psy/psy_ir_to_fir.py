@@ -748,7 +748,13 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
     elif isinstance(field.type, psy_ir.NamedType):
       # This is a scalar and simply set outside the stencil loop and used in here
       # therefore include the context of this but don't need to do anything else
-      new_ctx[field.var_name.data]=ctx[field.var_name.data]
+      scalar_var=ctx[field.var_name.data]
+      if isinstance(scalar_var.typ, fir.ReferenceType):
+        load_op=fir.Load.create(operands=[scalar_var], result_types=[scalar_var.typ.type])
+        ops+=[load_op]
+        new_ctx[field.var_name.data]=load_op.results[0]
+      else:
+        new_ctx[field.var_name.data]=scalar_var
 
   output_field_cast_op=None
 
@@ -777,7 +783,7 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
       ops+=[external_load_op]
     output_field_cast_op=stencil.CastOp.get(external_load_op.results[0], lb, ub, external_load_op.results[0].typ)
     ops+=[output_field_cast_op]
-    new_ctx[field.var_name.data]=output_field_cast_op.results[0]
+    #new_ctx[field.var_name.data]=output_field_cast_op.results[0]
 
   for op in stencil_stmt.body.blocks[0].ops:
     if not isinstance(op, psy_stencil.PsyStencil_DeferredArrayInfo):
@@ -1532,19 +1538,20 @@ def try_translate_expr(
       return [op], op.results[0]
     if isinstance(op, psy_ir.ExprName):
       ssa_value = ctx[op.id.data]
+      has_nested_type = hasattr(ssa_value.typ, "type")
       assert isinstance(ssa_value, SSAValue)
       # We are limited here with type handling, need other floats - maybe a better way of doing this?
       if isinstance(ssa_value.typ, fir.ArrayType):
         return None, ssa_value
       elif isinstance(ssa_value.typ, mpi.VectorType):
         return None, ssa_value
-      elif isinstance(ssa_value.typ.type, IntegerType):
+      elif isinstance(ssa_value.typ, IntegerType) or (has_nested_type and isinstance(ssa_value.typ.type, fir.IntegerType)):
         result_type=i32
-      elif isinstance(ssa_value.typ.type, Float32Type):
+      elif isinstance(ssa_value.typ, Float32Type) or (has_nested_type and isinstance(ssa_value.typ.type, fir.Float32Type)):
         result_type=f32
-      elif isinstance(ssa_value.typ.type, Float64Type):
+      elif isinstance(ssa_value.typ, Float64Type) or (has_nested_type and isinstance(ssa_value.typ.type, fir.Float64Type)):
         result_type=f64
-      elif isinstance(ssa_value.typ.type, fir.ArrayType):
+      elif isinstance(ssa_value.typ, fir.ArrayType) or (has_nested_type and isinstance(ssa_value.typ.type, fir.ArrayType)):
         # Already have created the addressof reference so just return this
         return None, ssa_value
       elif isinstance(ssa_value.typ.type, fir.BoxType):
