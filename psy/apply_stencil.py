@@ -1,5 +1,6 @@
 from xdsl.dialects.builtin import ModuleOp
 from dataclasses import dataclass
+import itertools
 from xdsl.ir import Operation, SSAValue, Region, Block, MLContext
 from xdsl.dialects.builtin import IntegerAttr, StringAttr, ArrayAttr, IntAttr
 from xdsl.pattern_rewriter import (GreedyRewritePatternApplier,
@@ -469,6 +470,56 @@ class ApplyStencilRewriter(RewritePattern):
         walker = PatternRewriteWalker(GreedyRewritePatternApplier([RemoveEmptyLoops()]), walk_regions_first=True)
         walker.rewrite_module(for_loop)
 
+class MergeApplicableStencils(RewritePattern):
+    def check_is_equals(a, b):
+      if len(a) != len(b): return False
+      for a_el, b_el in zip(a,b):
+        if a_el != b_el: return False
+      return True
+
+    def build_superset_tokens(in1, in2):
+      superset=[]
+      token_list=[]
+      for field in in1:
+        superset.append(field)
+        token_list.append(field.var_name.data)
+
+      for field in in2:
+        if field.var_name.data not in token_list:
+          superset.append(field)
+      return superset
+
+    @op_type_rewrite_pattern
+    def match_and_rewrite(
+            self, stencil_op: psy_stencil.PsyStencil_Stencil, rewriter: PatternRewriter):
+      ops=[op for op in stencil_op.parent.ops]
+      my_index=stencil_op.parent.get_operation_index(stencil_op)
+      if my_index < 1: return
+      if isinstance(ops[my_index-1], psy_stencil.PsyStencil_Stencil):
+        target_stencil=ops[my_index-1]
+        if not MergeApplicableStencils.check_is_equals(target_stencil.from_bounds.data, stencil_op.from_bounds.data): return
+        if not MergeApplicableStencils.check_is_equals(target_stencil.to_bounds.data, stencil_op.to_bounds.data): return
+        if not MergeApplicableStencils.check_is_equals(target_stencil.min_relative_offset.data, stencil_op.min_relative_offset.data): return
+        if not MergeApplicableStencils.check_is_equals(target_stencil.max_relative_offset.data, stencil_op.max_relative_offset.data): return
+        deferred_array_info_ops=[]
+        stencil_result_ops=[]
+        for op in itertools.chain(stencil_op.body.ops, target_stencil.body.ops):
+          if isinstance(op, psy_stencil.PsyStencil_DeferredArrayInfo):
+            deferred_array_info_ops.append(op)
+          elif isinstance(op, psy_stencil.PsyStencil_Result):
+            stencil_result_ops.append(op)
+          else:
+            assert False
+          op.detach()
+        input_fields=MergeApplicableStencils.build_superset_tokens(stencil_op.input_fields, target_stencil.input_fields)
+        output_fields=MergeApplicableStencils.build_superset_tokens(stencil_op.output_fields, target_stencil.output_fields)
+
+        new_stencil=psy_stencil.PsyStencil_Stencil.build(attributes={"input_fields": ArrayAttr(input_fields),
+              "output_fields": ArrayAttr(output_fields), "from_bounds": target_stencil.from_bounds, "to_bounds": target_stencil.to_bounds,
+              "min_relative_offset": target_stencil.min_relative_offset, "max_relative_offset": target_stencil.max_relative_offset},
+              regions=[deferred_array_info_ops+stencil_result_ops])
+        target_stencil.detach()
+        rewriter.replace_matched_op(new_stencil)
 
 @dataclass
 class ApplyStencilAnalysis(ModulePass):
@@ -481,3 +532,7 @@ class ApplyStencilAnalysis(ModulePass):
     applyStencilRewriter=ApplyStencilRewriter()
     walker = PatternRewriteWalker(GreedyRewritePatternApplier([applyStencilRewriter]), apply_recursively=False)
     walker.rewrite_module(input_module)
+
+    walker = PatternRewriteWalker(GreedyRewritePatternApplier([MergeApplicableStencils()]), apply_recursively=False)
+    walker.rewrite_module(input_module)
+
