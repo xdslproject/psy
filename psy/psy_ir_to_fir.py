@@ -578,6 +578,9 @@ def translate_psy_stencil_result(ctx: SSAValueCtx, stencil_result: Operation, pr
   for var in stencil_result.input_fields.data:
     block_fields[var.var_name.data]=ctx[var.var_name.data].typ
 
+  stencil_op=stencil_result.parent.parent.parent
+  assert isinstance(stencil_op, psy_stencil.PsyStencil_Stencil)
+
   #if stencil_result.out_field.var_name.data not in block_fields.keys():
   #  block_fields[stencil_result.out_field.var_name.data]=ctx[stencil_result.out_field.var_name.data].typ
 
@@ -619,10 +622,6 @@ def translate_psy_stencil_result(ctx: SSAValueCtx, stencil_result: Operation, pr
 
   block.add_ops(ops)
 
-  #num_deferred=count_array_type_contains_deferred(stencil_result.out_field.type)
-  #print(num_deferred)
-  #exit(0)
-
   num_deferred=stencil_result.out_field.type.get_num_deferred_dim()
   # Ensure either no dimensions are deferred or they all are
   assert num_deferred == 0 or num_deferred == stencil_result.out_field.type.get_num_dims()
@@ -631,16 +630,16 @@ def translate_psy_stencil_result(ctx: SSAValueCtx, stencil_result: Operation, pr
   else:
     array_sizes=interogate_stencil_field_inference_sizes(stencil_result.out_field.var_name.data, stencil_result.parent.ops)
 
-  assert len(array_sizes) == len(stencil_result.from_bounds.data)
-  assert len(array_sizes) == len(stencil_result.to_bounds.data)
+  assert len(array_sizes) == len(stencil_op.from_bounds.data)
+  assert len(array_sizes) == len(stencil_op.to_bounds.data)
 
   lb_ints=[]
-  for el in stencil_result.from_bounds.data:
+  for el in stencil_op.from_bounds.data:
     # We minus one as going from Fortran indexing to C style
     lb_ints.append(el.data-1)
 
   ub_ints=[]
-  for el in stencil_result.to_bounds.data:
+  for el in stencil_op.to_bounds.data:
     ub_ints.append(el.data)
 
   lb=experimental_stencil.IndexAttr.get(*lb_ints)

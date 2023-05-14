@@ -12,6 +12,10 @@ class PsyStencil_Stencil(IRDLOperation):
 
     input_fields: OpAttr[ArrayAttr]
     output_fields: OpAttr[ArrayAttr]
+    from_bounds: OpAttr[ArrayAttr]
+    to_bounds: OpAttr[ArrayAttr]
+    min_relative_offset: OpAttr[ArrayAttr]
+    max_relative_offset: OpAttr[ArrayAttr]
     body: SingleBlockRegion
 
 @irdl_op_definition
@@ -39,10 +43,6 @@ class PsyStencil_DeferredArrayInfo(IRDLOperation):
 class PsyStencil_Result(IRDLOperation):
     name: str = "psy.stencil.result"
 
-    from_bounds: OpAttr[ArrayAttr]
-    to_bounds: OpAttr[ArrayAttr]
-    min_relative_offset: OpAttr[ArrayAttr]
-    max_relative_offset: OpAttr[ArrayAttr]
     out_field: OpAttr[AnyAttr()]
     input_fields: OpAttr[ArrayAttr]
     stencil_ops: OpAttr[ArrayAttr]

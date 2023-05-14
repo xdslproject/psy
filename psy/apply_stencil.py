@@ -413,11 +413,11 @@ class ApplyStencilRewriter(RewritePattern):
 
           # For now assume only one result per stencil, hence use same stencil read_vars as input_fields to stencil result
           stencil_result=psy_stencil.PsyStencil_Result.build(attributes={"out_field": assign_op.lhs.blocks[0].ops.first.var,
-              "input_fields": ArrayAttr(read_vars), "stencil_ops": ArrayAttr([]),
-              "from_bounds": ArrayAttr(lb), "to_bounds": ArrayAttr(ub),
-              "min_relative_offset": ArrayAttr(min_indicies), "max_relative_offset": ArrayAttr(max_indicies)}, regions=[[rhs]])
+              "input_fields": ArrayAttr(read_vars), "stencil_ops": ArrayAttr([])}, regions=[[rhs]])
 
-          stencil_op=psy_stencil.PsyStencil_Stencil.build(attributes={"input_fields": ArrayAttr(read_vars), "output_fields":ArrayAttr([write_var])}, regions=[deferred_info_ops+[stencil_result]])
+          stencil_op=psy_stencil.PsyStencil_Stencil.build(attributes={"input_fields": ArrayAttr(read_vars),
+              "output_fields":ArrayAttr([write_var]), "from_bounds": ArrayAttr(lb), "to_bounds": ArrayAttr(ub),
+              "min_relative_offset": ArrayAttr(min_indicies), "max_relative_offset": ArrayAttr(max_indicies)}, regions=[deferred_info_ops+[stencil_result]])
           return v3.top_loop, assign_op, stencil_op
         else:
           return None, None, None
