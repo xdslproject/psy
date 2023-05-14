@@ -83,7 +83,13 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
         if isinstance(op, stencil.ExternalLoadOp): return op
       return None
 
-    def bridge_fir_deferred_array(external_load_op, ptr_type):
+    def stencilApplyNeedsArgsRewriting(stencil_apply):
+      for arg in stencil_apply.args:
+        if not isinstance(arg.typ, stencil.TempType):
+          return True
+      return False
+
+    def bridge_fir_deferred_array(self, external_load_op, ptr_type):
       # This is deferred type, but just check the type is what we expect
       # Should be !fir.ref<!fir.box<!fir.heap<!fir.array<?x?x?x!f64>>>>
       # With any number of array dimensions
@@ -136,21 +142,26 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
       arg_ops=[]
       op_types=[]
       ops_to_add=[]
-      for value in itertools.chain(input_args_to_ops.values(), output_args_to_ops.values()):
+      for key, value in itertools.chain(input_args_to_ops.items(), output_args_to_ops.items()):
           external_load_op=ExtractStencilOps.find_ExternalLoad(value)
-          assert external_load_op is not None
-          nt=self.get_nested_type(external_load_op.field.typ, fir.ArrayType)
-          ptr_type=fir.LLVMPointerType([nt.type])
-          op_types.append(ptr_type)
-          if isinstance(external_load_op.field.owner, builtin.UnrealizedConversionCastOp):
-            # This is a deferred type array, so bridge it
-            ops, arg=ExtractStencilOps.bridge_fir_deferred_array(external_load_op, ptr_type)
-            ops_to_add+=ops
-            arg_ops.append(arg)
+          if external_load_op is not None:
+            nt=self.get_nested_type(external_load_op.field.typ, fir.ArrayType)
+            ptr_type=fir.LLVMPointerType([nt.type])
+            op_types.append(ptr_type)
+            if isinstance(external_load_op.field.owner, builtin.UnrealizedConversionCastOp):
+              # This is a deferred type array, so bridge it
+              ops, arg=self.bridge_fir_deferred_array(external_load_op, ptr_type)
+              ops_to_add+=ops
+              arg_ops.append(arg)
+            else:
+              # Plain array type, easier to bridge
+              convert_op=fir.Convert.create(operands=[external_load_op.field], result_types=[ptr_type])
+              arg_ops.append(convert_op)
+              ops_to_add+=[convert_op]
           else:
-            convert_op=fir.Convert.create(operands=[external_load_op.field], result_types=[ptr_type])
-            arg_ops.append(convert_op)
-            ops_to_add+=[convert_op]
+            # Is a scalar variable, pass this in directly
+            arg_ops.append(key.owner)
+            op_types.append(key.typ)
 
       parent=apply_stencil_op.parent
 
@@ -166,6 +177,23 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
         parent.detach_op(op)
 
       stencil_bridge_fn=_StencilExtractorRewriteBase.wrap_stencil_in_func(function_name, op_types, stencil_ops)
+      # Now if there is a scalar we need to rewrite the stencil op to refer to this
+      # in the arguments (e.g. the argument passed to the extracted function)
+      if ExtractStencilOps.stencilApplyNeedsArgsRewriting(apply_stencil_op):
+        new_args=[]
+        for index, arg in enumerate(apply_stencil_op.args):
+          if isinstance(arg.typ, stencil.TempType):
+            new_args.append(arg)
+          else:
+            new_args.append(stencil_bridge_fn.args[index])
+        block=apply_stencil_op.region.block
+        apply_stencil_op.region.detach_block(0)
+        result_types=[]
+        for res in apply_stencil_op.res:
+          result_types.append(res.typ)
+        new_stencil=stencil.ApplyOp.get(new_args, block, result_types, apply_stencil_op.lb, apply_stencil_op.ub)
+        rewriter.replace_matched_op(new_stencil)
+
       self.bridgedFunctions[function_name]=stencil_bridge_fn
 
 class AddExternalFuncDefs(RewritePattern):
@@ -231,6 +259,14 @@ class ConnectExternalLoadToFunctionInput(RewritePattern):
       c_style.insert(0, builtin.IntegerAttr.from_index_int_value(shape[i].value.data))
     return c_style
 
+  def get_parent_arg(self, ptr_arg_num, func_op):
+    current_index=-1
+    for arg in func_op.args:
+      if isinstance(arg.typ, llvm.LLVMPointerType):
+        current_index+=1
+        if current_index==ptr_arg_num: return arg
+    assert False
+
   """
   Connects external load at the start of the bridged function with the
   input argument (note we will need to load this into a memref here)
@@ -254,15 +290,17 @@ class ConnectExternalLoadToFunctionInput(RewritePattern):
 
     num_prev_external_loads=ConnectExternalLoadToFunctionInput.count_instances_preceeding(op.parent.ops, idx-1, stencil.ExternalLoadOp)
 
-    ptr_type=op.parent.args[num_prev_external_loads].typ
+    ptr_type=op.field.typ
     array_typ=llvm.LLVMArrayType.from_size_and_type(builtin.IntAttr(number_dims), builtin.i64)
     struct_type=llvm.LLVMStructType.from_type_list([ptr_type, ptr_type, builtin.i64, array_typ, array_typ])
 
+    func_arg=self.get_parent_arg(num_prev_external_loads, op.parent)
+
     undef_memref_struct=llvm.LLVMMLIRUndef.create(result_types=[struct_type])
     insert_alloc_ptr_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i64, [0])},
-      operands=[undef_memref_struct.results[0], op.parent.args[num_prev_external_loads]], result_types=[struct_type])
+      operands=[undef_memref_struct.results[0], func_arg], result_types=[struct_type])
     insert_aligned_ptr_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i64, [1])},
-      operands=[insert_alloc_ptr_op.results[0], op.parent.args[num_prev_external_loads]], result_types=[struct_type])
+      operands=[insert_alloc_ptr_op.results[0], func_arg], result_types=[struct_type])
 
     offset_op=arith.Constant.from_int_and_width(0, 64)
     insert_offset_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i64, [2])},
@@ -283,7 +321,7 @@ class ConnectExternalLoadToFunctionInput(RewritePattern):
 
       ops_to_add+=[size_op, insert_size_op, stride_op, insert_stride_op]
 
-
+    #if isinstance(ptr_type, llvm.LLVMPointerType):
     target_memref_type=MemRefType.from_element_type_and_shape(ptr_type.type, ConnectExternalLoadToFunctionInput.get_c_style_array_shape(array_type))
 
     unrealised_conv_cast_op=builtin.UnrealizedConversionCastOp.create(operands=[insert_stride_op.results[0]], result_types=[target_memref_type])
@@ -325,7 +363,7 @@ class ExtractStencil(ModulePass):
     walker1 = PatternRewriteWalker(GreedyRewritePatternApplier([
               extractStencil,
     ]),
-                                   apply_recursively=True)
+                                   apply_recursively=False)
     walker1.rewrite_module(module)
 
     # Now add in external function signature for new bridged functions
