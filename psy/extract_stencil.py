@@ -2,6 +2,7 @@ from abc import ABC
 from typing import TypeVar, cast
 from dataclasses import dataclass
 from ftn.dialects import fir
+import itertools
 from xdsl.utils.hints import isa
 from xdsl.dialects.memref import MemRefType
 from xdsl.ir import Operation, SSAValue, OpResult, Attribute, MLContext, Block, Region
@@ -13,6 +14,7 @@ from xdsl.pattern_rewriter import (RewritePattern, PatternRewriter,
 from xdsl.passes import ModulePass
 from xdsl.dialects import builtin, func, llvm, arith
 from xdsl.dialects.experimental import stencil
+from xdsl.dialects import stencil as dialect_stencil
 
 
 @dataclass
@@ -56,6 +58,16 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
       if getattr(in_type, "type", None) is None: return False
       return ExtractStencilOps.has_nested_type(in_type.type, search_type)
 
+    def getOperationsUntilExternalLoadOpFromStencilArg(arg):
+      if isinstance(arg.op, stencil.LoadOp) or isinstance(arg.op,
+          dialect_stencil.CastOp) or isinstance(arg.op, stencil.ExternalLoadOp):
+        yield from ExtractStencilOps.getOperationsUntilExternalLoadOpFromStencilArg(arg.op.field)
+
+      if isinstance(arg.op, stencil.LoadOp) or isinstance(arg.op,
+          dialect_stencil.CastOp) or isinstance(arg.op, stencil.ExternalLoadOp) or isinstance(arg.op,
+          builtin.UnrealizedConversionCastOp):
+        yield arg.op
+
     """
     This will extract the stencil operations and replace them with a function call, converting the
     input array into fir.LLVMPointer type. Note currently this is very limited in terms of assuming
@@ -65,73 +77,96 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
     Note that the logic here is fairly simple, we assume all the stencil operations are between the external
     load and the external store. Hence we grab all of those as a chunk and move them out
     """
+
+    def find_ExternalLoad(ops):
+      for op in ops:
+        if isinstance(op, stencil.ExternalLoadOp): return op
+      return None
+
+    def bridge_fir_deferred_array(external_load_op, ptr_type):
+      # This is deferred type, but just check the type is what we expect
+      # Should be !fir.ref<!fir.box<!fir.heap<!fir.array<?x?x?x!f64>>>>
+      # With any number of array dimensions
+      # In this case need to load and debox it, that gives us a heap
+      # we can then convert to an llvm pointer
+      data_type=external_load_op.field.owner.inputs[0].typ
+      assert isinstance(data_type, fir.ReferenceType)
+      assert ExtractStencilOps.has_nested_type(data_type, fir.BoxType)
+      assert ExtractStencilOps.has_nested_type(data_type, fir.HeapType)
+
+      box_type=self.get_nested_type(data_type, fir.BoxType)
+      heap_type=self.get_nested_type(data_type, fir.HeapType)
+
+      load_op=fir.Load.create(operands=[external_load_op.field.owner.inputs[0]], result_types=[box_type])
+      box_addr_op=fir.BoxAddr.create(operands=[load_op.results[0]], result_types=[heap_type])
+      convert_op=fir.Convert.create(operands=[box_addr_op.results[0]], result_types=[ptr_type])
+      return [load_op, box_addr_op, convert_op], convert_op
+
     @op_type_rewrite_pattern
-    def match_and_rewrite(self, external_load_op: stencil.ExternalLoadOp, rewriter: PatternRewriter, /):
-        parent_op=external_load_op.parent
-        idx = None
-        op_list=[op for op in parent_op.ops]
-        for index, test_op in enumerate(parent_op.ops):
-          if test_op == external_load_op:
-            idx=index
-            break
-        assert idx is not None
+    def match_and_rewrite(self, apply_stencil_op: stencil.ApplyOp, rewriter: PatternRewriter, /):
+      input_args_to_ops={}
+      stencil_ops=[]
+      for input_arg in apply_stencil_op.args:
+        ops=list(ExtractStencilOps.getOperationsUntilExternalLoadOpFromStencilArg(input_arg))
+        input_args_to_ops[input_arg]=ops
+        stencil_ops+=ops
 
-        if idx > 0 and isinstance(op_list[idx-1], builtin.UnrealizedConversionCastOp):
-          # We do this to catch any unrealized conversion cast that preceeds the first external load
-          # this will be detached later on, but needs to be in the extracted function to do so
-          idx-=1
-        stencil_ops=[]
-        ops_to_load_in=[]
-        for index, op in enumerate(parent_op.ops):
-          if index < idx: continue
-          stencil_ops.append(op_list[index])
-          if isinstance(op_list[index], stencil.ExternalLoadOp):
-            ops_to_load_in.append(op_list[index])
-          if isinstance(op_list[index], stencil.ExternalStoreOp):
-            break
+      output_args_to_ops={}
+      for output_arg in apply_stencil_op.res:
+        for use in output_arg.uses:
+          if isinstance(use.operation, stencil.StoreOp):
+            ops=list(ExtractStencilOps.getOperationsUntilExternalLoadOpFromStencilArg(use.operation.field))
+          else:
+            assert False
+        output_args_to_ops[output_arg]=ops
+        stencil_ops+=ops
 
-        arg_ops=[]
-        op_types=[]
-        ops_to_add=[]
-        for sop in ops_to_load_in:
-          nt=self.get_nested_type(sop.field.typ, fir.ArrayType)
+      stencil_ops.append(apply_stencil_op)
+
+      for output_arg in apply_stencil_op.res:
+        for arg_use in output_arg.uses:
+          stencil_ops.append(arg_use.operation)
+          # We are searching for the external store now
+          ops=list(ExtractStencilOps.getOperationsUntilExternalLoadOpFromStencilArg(use.operation.field))
+          external_load_op=ExtractStencilOps.find_ExternalLoad(ops)
+          for u in external_load_op.results[0].uses:
+            if isinstance(u.operation, stencil.ExternalStoreOp):
+              stencil_ops.append(u.operation)
+
+      arg_ops=[]
+      op_types=[]
+      ops_to_add=[]
+      for value in itertools.chain(input_args_to_ops.values(), output_args_to_ops.values()):
+          external_load_op=ExtractStencilOps.find_ExternalLoad(value)
+          assert external_load_op is not None
+          nt=self.get_nested_type(external_load_op.field.typ, fir.ArrayType)
           ptr_type=fir.LLVMPointerType([nt.type])
           op_types.append(ptr_type)
-          if isinstance(sop.field.owner, builtin.UnrealizedConversionCastOp):
-            # This is deferred type, but just check the type is what we expect
-            # Should be !fir.ref<!fir.box<!fir.heap<!fir.array<?x?x?x!f64>>>>
-            # With any number of array dimensions
-            # In this case need to load and debox it, that gives us a heap
-            # we can then convert to an llvm pointer
-            data_type=sop.field.owner.inputs[0].typ
-            assert isinstance(data_type, fir.ReferenceType)
-            assert ExtractStencilOps.has_nested_type(data_type, fir.BoxType)
-            assert ExtractStencilOps.has_nested_type(data_type, fir.HeapType)
-
-            box_type=self.get_nested_type(data_type, fir.BoxType)
-            heap_type=self.get_nested_type(data_type, fir.HeapType)
-
-            load_op=fir.Load.create(operands=[sop.field.owner.inputs[0]], result_types=[box_type])
-            box_addr_op=fir.BoxAddr.create(operands=[load_op.results[0]], result_types=[heap_type])
-            convert_op=fir.Convert.create(operands=[box_addr_op.results[0]], result_types=[ptr_type])
-            arg_ops.append(convert_op)
-            ops_to_add+=[load_op, box_addr_op, convert_op]
+          if isinstance(external_load_op.field.owner, builtin.UnrealizedConversionCastOp):
+            # This is a deferred type array, so bridge it
+            ops, arg=ExtractStencilOps.bridge_fir_deferred_array(external_load_op, ptr_type)
+            ops_to_add+=ops
+            arg_ops.append(arg)
           else:
-            convert_op=fir.Convert.create(operands=[sop.field], result_types=[ptr_type])
+            convert_op=fir.Convert.create(operands=[external_load_op.field], result_types=[ptr_type])
             arg_ops.append(convert_op)
             ops_to_add+=[convert_op]
 
-        function_name="_InternalBridgeStencil_"+str(self.bridge_id)
-        self.bridge_id+=1
+      parent=apply_stencil_op.parent
 
-        call_stencil=fir.Call.create(attributes={"callee": builtin.SymbolRefAttr(function_name)}, operands=[el.results[0] for el in arg_ops], result_types=[])
-        #parent_op.insert_op(ops_to_add+[call_stencil], idx+1)
-        #rewriter.insert_op_before(ops_to_add+[call_stencil], external_load_op)
-        parent_op.insert_ops_before(ops_to_add+[call_stencil], external_load_op)
-        for index, sop in enumerate(stencil_ops):
-          parent_op.detach_op(sop)
-        stencil_bridge_fn=_StencilExtractorRewriteBase.wrap_stencil_in_func(function_name, op_types, stencil_ops)
-        self.bridgedFunctions[function_name]=stencil_bridge_fn
+      function_name="_InternalBridgeStencil_"+str(self.bridge_id)
+      self.bridge_id+=1
+
+      call_stencil=fir.Call.create(attributes={"callee": builtin.SymbolRefAttr(function_name)}, operands=[el.results[0] for el in arg_ops], result_types=[])
+      parent.insert_ops_before(ops_to_add+[call_stencil], apply_stencil_op)
+
+      for op in stencil_ops:
+        parent=op.parent_block()
+        assert parent is not None
+        parent.detach_op(op)
+
+      stencil_bridge_fn=_StencilExtractorRewriteBase.wrap_stencil_in_func(function_name, op_types, stencil_ops)
+      self.bridgedFunctions[function_name]=stencil_bridge_fn
 
 class AddExternalFuncDefs(RewritePattern):
     """
