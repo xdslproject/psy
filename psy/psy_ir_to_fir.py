@@ -573,82 +573,6 @@ def translate_psy_stencil_access(ctx: SSAValueCtx, stencil_access: Operation, pr
   access_op=experimental_stencil.AccessOp.get(ctx[stencil_access.var.var_name.data], offsets)
   return [access_op], access_op.results[0]
 
-def translate_psy_stencil_result(ctx: SSAValueCtx, stencil_result: Operation, program_state : ProgramState) -> List[Operation]:
-  block_fields={}
-  for var in stencil_result.input_fields.data:
-    block_fields[var.var_name.data]=ctx[var.var_name.data].typ
-
-  stencil_op=stencil_result.parent.parent.parent
-  assert isinstance(stencil_op, psy_stencil.PsyStencil_Stencil)
-
-  #if stencil_result.out_field.var_name.data not in block_fields.keys():
-  #  block_fields[stencil_result.out_field.var_name.data]=ctx[stencil_result.out_field.var_name.data].typ
-
-  block_types=[]
-  block_idx={}
-  block_ops=[]
-  for index, (key, value) in enumerate(block_fields.items()):
-    block_types.append(value)
-    block_ops.append(ctx[key])
-    block_idx[key]=index
-
-
-  c = SSAValueCtx(dictionary=dict(),
-                    parent_scope=ctx)
-  block = Block(arg_types=block_types)
-
-  for key, index in block_idx.items():
-    c[key]=block.args[index]
-
-  #c[stencil_result.var.var_name.data]=block.args[0]
-
-  ops: List[Operation] = []
-  for op in stencil_result.stencil_accesses.blocks[0].ops:
-    stmt_ops, ssa = translate_expr(c, op, program_state)
-    ops += stmt_ops
-
-  assert isinstance(stencil_result.out_field.type, psy_ir.ArrayType)
-  el_type=try_translate_type(stencil_result.out_field.type.element_type)
-  assert el_type is not None
-  rt=experimental_stencil.ResultType([el_type])
-
-  if el_type != ops[-1].results[0].typ:
-    data_conv_op=perform_data_conversion_if_needed(ops[-1].results[0], el_type)
-    return_op=experimental_stencil.ReturnOp.get([data_conv_op.results[0]])
-    ops+=[data_conv_op, return_op]
-  else:
-    return_op=experimental_stencil.ReturnOp.get([ops[-1].results[0]])
-    ops+=[return_op]
-
-  block.add_ops(ops)
-
-  num_deferred=stencil_result.out_field.type.get_num_deferred_dim()
-  # Ensure either no dimensions are deferred or they all are
-  assert num_deferred == 0 or num_deferred == stencil_result.out_field.type.get_num_dims()
-  if num_deferred == 0:
-    array_sizes=get_array_sizes(stencil_result.out_field.type)
-  else:
-    array_sizes=interogate_stencil_field_inference_sizes(stencil_result.out_field.var_name.data, stencil_result.parent.ops)
-
-  assert len(array_sizes) == len(stencil_op.from_bounds.data)
-  assert len(array_sizes) == len(stencil_op.to_bounds.data)
-
-  lb_ints=[]
-  for el in stencil_op.from_bounds.data:
-    # We minus one as going from Fortran indexing to C style
-    lb_ints.append(el.data-1)
-
-  ub_ints=[]
-  for el in stencil_op.to_bounds.data:
-    ub_ints.append(el.data)
-
-  lb=experimental_stencil.IndexAttr.get(*lb_ints)
-  ub=experimental_stencil.IndexAttr.get(*ub_ints)
-  stencil_temptype=experimental_stencil.TempType.from_shape([-1] * len(array_sizes), el_type)
-  apply_op=experimental_stencil.ApplyOp.get(block_ops, block, [stencil_temptype], lb, ub)
-
-  return [apply_op]
-
 def get_array_sizes(array_type):
   return get_size_from_lb_ub_array(array_type.shape.data)
 
@@ -698,6 +622,57 @@ def rebuild_deferred_fir_array_with_bounds(in_type, array_sizes):
 
   return to_add
 
+def translate_psy_stencil_result(ctx: SSAValueCtx, stencil_result: Operation, program_state : ProgramState) -> List[Operation]:
+
+  ops: List[Operation] = []
+  for op in stencil_result.stencil_accesses.blocks[0].ops:
+    stmt_ops, ssa = translate_expr(ctx, op, program_state)
+    ops += stmt_ops
+
+  assert isinstance(stencil_result.out_field.type, psy_ir.ArrayType)
+  el_type=try_translate_type(stencil_result.out_field.type.element_type)
+  assert el_type is not None
+  rt=experimental_stencil.ResultType([el_type])
+
+  if el_type != ops[-1].results[0].typ:
+    data_conv_op=perform_data_conversion_if_needed(ops[-1].results[0], el_type)
+    #return_op=experimental_stencil.ReturnOp.get([data_conv_op.results[0]])
+    ops+=[data_conv_op]
+    return ops, data_conv_op.results[0]
+  else:
+    #return_op=experimental_stencil.ReturnOp.get([ops[-1].results[0]])
+    #ops+=[return_op]
+    return ops, ops[-1].results[0]
+
+
+
+  num_deferred=stencil_result.out_field.type.get_num_deferred_dim()
+  # Ensure either no dimensions are deferred or they all are
+  assert num_deferred == 0 or num_deferred == stencil_result.out_field.type.get_num_dims()
+  if num_deferred == 0:
+    array_sizes=get_array_sizes(stencil_result.out_field.type)
+  else:
+    array_sizes=interogate_stencil_field_inference_sizes(stencil_result.out_field.var_name.data, stencil_result.parent.ops)
+
+  assert len(array_sizes) == len(stencil_op.from_bounds.data)
+  assert len(array_sizes) == len(stencil_op.to_bounds.data)
+
+  lb_ints=[]
+  for el in stencil_op.from_bounds.data:
+    # We minus one as going from Fortran indexing to C style
+    lb_ints.append(el.data-1)
+
+  ub_ints=[]
+  for el in stencil_op.to_bounds.data:
+    ub_ints.append(el.data)
+
+  lb=experimental_stencil.IndexAttr.get(*lb_ints)
+  ub=experimental_stencil.IndexAttr.get(*ub_ints)
+  stencil_temptype=experimental_stencil.TempType.from_shape([-1] * len(array_sizes), el_type)
+  apply_op=experimental_stencil.ApplyOp.get(block_ops, block, [stencil_temptype], lb, ub)
+
+  return [apply_op]
+
 def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, program_state : ProgramState) -> List[Operation]:
   ops: List[Operation] = []
   new_ctx=SSAValueCtx()
@@ -706,9 +681,9 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
   # Build the lower and upper bounds up - note how we are picking off the first stencil
   # result here, we assume currently only one per stencil - need to enhance when we
   # support multiple ones
-  stencil_results_located=find_ops_with_type(stencil_stmt.body.blocks[0].ops, psy_stencil.PsyStencil_Result)
-  assert len(stencil_results_located) == 1
-  stencil_result_op=stencil_results_located[0]
+  #stencil_results_located=find_ops_with_type(stencil_stmt.body.blocks[0].ops, psy_stencil.PsyStencil_Result)
+  #assert len(stencil_results_located) == 1
+  #stencil_result_op=stencil_results_located[0]
   # -1 further offset for lb as Fortran array is 1 indexed, whereas C is 0 - so need to apply that here too
   #lb=get_stencil_data_range(stencil_result_op.from_bounds.data, stencil_result_op.min_relative_offset.data, -1)
   # No need for a further offset as loop in C is less than, rather than less than equals in Fortran so all good!
@@ -784,17 +759,58 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
     ops+=[output_field_cast_op]
     #new_ctx[field.var_name.data]=output_field_cast_op.results[0]
 
+  block_fields={}
+  for var in stencil_stmt.input_fields.data:
+    block_fields[var.var_name.data]=ctx[var.var_name.data].typ
+
+  block_types=[]
+  block_idx={}
+  block_ops=[]
+  for index, (key, value) in enumerate(block_fields.items()):
+    if isinstance(value, fir.ReferenceType):
+      block_types.append(value.type)
+      load_op=fir.Load.create(operands=[ctx[key]], result_types=[value.type])
+      ops.append(load_op)
+      block_ops.append(load_op)
+    else:
+      block_types.append(value)
+      block_ops.append(ctx[key])
+    block_idx[key]=index
+
+  c = SSAValueCtx(dictionary=dict())
+  block = Block(arg_types=block_types)
+
+  for key, index in block_idx.items():
+    c[key]=block.args[index]
+
+  stencil_contents=[]
+  result_ssa_vals=[]
   for op in stencil_stmt.body.blocks[0].ops:
     if not isinstance(op, psy_stencil.PsyStencil_DeferredArrayInfo):
       # Ignore the deferred array info statements
-      stmt_ops = translate_stmt(new_ctx, op, program_state)
-      ops += stmt_ops
+      assert isinstance(op, psy_stencil.PsyStencil_Result)
+      result_ops, ssa_result=translate_psy_stencil_result(c, op, program_state)
+      stencil_contents+=result_ops
+      result_ssa_vals.append(ssa_result)
+
+  return_op=experimental_stencil.ReturnOp.get(result_ssa_vals)
+  stencil_contents.append(return_op)
+
+  block.add_ops(stencil_contents)
+
+  lb=experimental_stencil.IndexAttr.get(1)
+  ub=experimental_stencil.IndexAttr.get(1)
+
+  # Need to handle each individual output variable (currently just assume one at location zero!)
+
+  stencil_temptype=experimental_stencil.TempType.from_shape([-1] * len(array_sizes), result_ssa_vals[0].typ)
+  apply_op=experimental_stencil.ApplyOp.get(block_ops, block, [stencil_temptype], lb, ub)
 
   out_var=stencil_stmt.output_fields.data[0].var_name.data
   index_location=experimental_stencil.IndexAttr.get(*array_sizes)
-  store_op=experimental_stencil.StoreOp.get(ops[-1].results[0], output_field_cast_op.results[0], index_location, index_location)
+  store_op=experimental_stencil.StoreOp.get(apply_op.results[0], output_field_cast_op.results[0], index_location, index_location)
   external_store_op=experimental_stencil.ExternalStoreOp.create(operands=[external_load_op.results[0], ctx[out_var]])
-  ops+=[store_op, external_store_op]
+  ops+=[apply_op, store_op, external_store_op]
 
   return ops
 
@@ -1537,6 +1553,9 @@ def try_translate_expr(
       return [op], op.results[0]
     if isinstance(op, psy_ir.ExprName):
       ssa_value = ctx[op.id.data]
+      if isinstance(ssa_value, BlockArgument):
+        # This is a block argument, therefore already loaded when was passed in
+        return [], ssa_value
       has_nested_type = hasattr(ssa_value.typ, "type")
       assert isinstance(ssa_value, SSAValue)
       # We are limited here with type handling, need other floats - maybe a better way of doing this?
