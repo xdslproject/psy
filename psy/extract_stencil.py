@@ -291,6 +291,12 @@ class ConnectExternalLoadToFunctionInput(RewritePattern):
     num_prev_external_loads=ConnectExternalLoadToFunctionInput.count_instances_preceeding(op.parent.ops, idx-1, stencil.ExternalLoadOp)
 
     ptr_type=op.field.typ
+    # If this is not already an LLVM pointer then extract out the scalar type and type to
+    # be an LLVM pointer to this
+    if not isinstance(ptr_type, llvm.LLVMPointerType):
+      nt=ConnectExternalLoadToFunctionInput.get_nested_type(ptr_type, fir.ArrayType)
+      ptr_type=llvm.LLVMPointerType.typed(nt.type)
+
     array_typ=llvm.LLVMArrayType.from_size_and_type(builtin.IntAttr(number_dims), builtin.i64)
     struct_type=llvm.LLVMStructType.from_type_list([ptr_type, ptr_type, builtin.i64, array_typ, array_typ])
 
