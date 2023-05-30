@@ -153,7 +153,6 @@ class LowerPsyIR(ModulePass):
 
     # Create program entry point
     op=get_program_entry_point(input_module)
-    print(type(op))
     if ("sym_visibility" in op.attributes and op.attributes["sym_visibility"].data == "private"):
       # Remove private from function visibility
       del op.attributes["sym_visibility"]
@@ -572,7 +571,6 @@ def translate_psy_stencil_access(ctx: SSAValueCtx, stencil_access: Operation, pr
   el_type=try_translate_type(stencil_access.var.type.element_type)
   assert el_type is not None
   offsets=([value.data for value in stencil_access.stencil_ops.data])
-  print(ctx[stencil_access.var.var_name.data].typ)
   access_op=experimental_stencil.AccessOp.get(ctx[stencil_access.var.var_name.data], offsets)
   return [access_op], access_op.results[0]
 
