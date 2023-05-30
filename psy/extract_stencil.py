@@ -133,7 +133,7 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
         for arg_use in output_arg.uses:
           stencil_ops.append(arg_use.operation)
           # We are searching for the external store now
-          ops=list(ExtractStencilOps.getOperationsUntilExternalLoadOpFromStencilArg(use.operation.field))
+          ops=list(ExtractStencilOps.getOperationsUntilExternalLoadOpFromStencilArg(arg_use.operation.field))
           external_load_op=ExtractStencilOps.find_ExternalLoad(ops)
           for u in external_load_op.results[0].uses:
             if isinstance(u.operation, stencil.ExternalStoreOp):
@@ -330,6 +330,7 @@ class ConnectExternalLoadToFunctionInput(RewritePattern):
     if idx > 0 and isinstance(op_list[idx-1], builtin.UnrealizedConversionCastOp):
       # Remove the unrealized conversion cast as it is no longer needed
       op_list[idx-1].detach()
+      del op_list[idx-1]
       idx-=1
 
     block=op.parent
