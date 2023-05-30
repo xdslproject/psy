@@ -801,8 +801,10 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
 
   block.add_ops(stencil_contents)
 
-  lb=experimental_stencil.IndexAttr.get(1)
-  ub=experimental_stencil.IndexAttr.get(1)
+  # With the from bounds we minus one to go into zero indexing regime
+  from_bounds=[el.data-1 for el in stencil_stmt.from_bounds]
+  lb=experimental_stencil.IndexAttr.get(*from_bounds)
+  ub=experimental_stencil.IndexAttr.get(*stencil_stmt.to_bounds)
 
   stencil_temptypes=[]
   for result_ssa_val in result_ssa_vals:
@@ -813,8 +815,9 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
 
   for index, out_tuple in enumerate(output_field_cast_ops):
     out_var_name=stencil_stmt.output_fields.data[index].var_name.data
-    index_location=experimental_stencil.IndexAttr.get(*array_sizes)
-    store_op=experimental_stencil.StoreOp.get(apply_op.results[index], out_tuple[0].results[0], index_location, index_location)
+    lb_indexes=experimental_stencil.IndexAttr.get(*([0] * len(array_sizes)))
+    ub_indexes=experimental_stencil.IndexAttr.get(*array_sizes)
+    store_op=experimental_stencil.StoreOp.get(apply_op.results[index], out_tuple[0].results[0], lb_indexes, ub_indexes)
     external_store_op=experimental_stencil.ExternalStoreOp.create(operands=[out_tuple[1].results[0], ctx[out_var_name]])
     ops+=[store_op, external_store_op]
 
