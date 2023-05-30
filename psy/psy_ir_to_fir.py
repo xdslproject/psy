@@ -730,7 +730,7 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
       else:
         new_ctx[field.var_name.data]=scalar_var
 
-  output_field_cast_op=None
+  output_field_cast_ops=[]
 
   for field in stencil_stmt.output_fields.data:
     assert isinstance(field.type, psy_ir.ArrayType)
@@ -756,6 +756,7 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
       external_load_op=experimental_stencil.ExternalLoadOp.get(ctx[field.var_name.data], experimental_stencil.FieldType.from_shape(array_sizes, el_type))
       ops+=[external_load_op]
     output_field_cast_op=stencil.CastOp.get(external_load_op.results[0], lb, ub, external_load_op.results[0].typ)
+    output_field_cast_ops.append((output_field_cast_op, external_load_op))
     ops+=[output_field_cast_op]
     #new_ctx[field.var_name.data]=output_field_cast_op.results[0]
 
@@ -801,16 +802,19 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
   lb=experimental_stencil.IndexAttr.get(1)
   ub=experimental_stencil.IndexAttr.get(1)
 
-  # Need to handle each individual output variable (currently just assume one at location zero!)
+  stencil_temptypes=[]
+  for result_ssa_val in result_ssa_vals:
+    stencil_temptypes.append(experimental_stencil.TempType.from_shape([-1] * len(array_sizes), result_ssa_val.typ))
+  apply_op=experimental_stencil.ApplyOp.get(block_ops, block, stencil_temptypes, lb, ub)
 
-  stencil_temptype=experimental_stencil.TempType.from_shape([-1] * len(array_sizes), result_ssa_vals[0].typ)
-  apply_op=experimental_stencil.ApplyOp.get(block_ops, block, [stencil_temptype], lb, ub)
+  ops.append(apply_op)
 
-  out_var=stencil_stmt.output_fields.data[0].var_name.data
-  index_location=experimental_stencil.IndexAttr.get(*array_sizes)
-  store_op=experimental_stencil.StoreOp.get(apply_op.results[0], output_field_cast_op.results[0], index_location, index_location)
-  external_store_op=experimental_stencil.ExternalStoreOp.create(operands=[external_load_op.results[0], ctx[out_var]])
-  ops+=[apply_op, store_op, external_store_op]
+  for index, out_tuple in enumerate(output_field_cast_ops):
+    out_var_name=stencil_stmt.output_fields.data[index].var_name.data
+    index_location=experimental_stencil.IndexAttr.get(*array_sizes)
+    store_op=experimental_stencil.StoreOp.get(apply_op.results[index], out_tuple[0].results[0], index_location, index_location)
+    external_store_op=experimental_stencil.ExternalStoreOp.create(operands=[out_tuple[1].results[0], ctx[out_var_name]])
+    ops+=[store_op, external_store_op]
 
   return ops
 
