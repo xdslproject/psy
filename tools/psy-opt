@@ -38,6 +38,15 @@ class PsyOptMain(xDSLOptMain):
     def setup_pipeline(self):
       super().setup_pipeline()
 
+    def register_all_arguments(self, arg_parser: argparse.ArgumentParser):
+      super().register_all_arguments(arg_parser)
+      arg_parser.add_argument(
+            "--output-module-files",
+            default=False,
+            action="store_true",
+            help="Outputs the generated module files on a module by module basis",
+        )
+
     def register_all_dialects(self):
         super().register_all_dialects()
         """Register all dialects that can be used."""
@@ -105,12 +114,13 @@ def __main__():
         for chunked_module in chunked_input[0]:
           module=psy_main.parse_chunk(chunked_module, file_extension)
           psy_main.apply_passes(module)
-          _empty_generate_dir()
 
           contents = psy_main.output_resulting_program(module)
           print(contents)
 
-          _output_modules_to_file_for_target(module, psy_main.args.target, psy_main)
+          if psy_main.args.output_module_files:
+            _empty_generate_dir()
+            _output_modules_to_file_for_target(module, psy_main.args.target, psy_main)
     except SyntaxError as e:
         print(e.get_message())
         exit(0)
