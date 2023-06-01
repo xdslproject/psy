@@ -701,13 +701,13 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
 
       # For now hack these in, as need to ensure memref cast that is generated is of correct size of
       # input array
-      lb=experimental_stencil.IndexAttr.get(*([-1]*len(array_sizes)))
-      ub=experimental_stencil.IndexAttr.get(*[v-1 for v in array_sizes])
+      lb=experimental_stencil.IndexAttr.get(*([0]*len(array_sizes)))
+      ub=experimental_stencil.IndexAttr.get(*[v for v in array_sizes])
       el_type=try_translate_type(field.type.element_type)
 
       field_bounds=[]
       for dim in array_sizes:
-        field_bounds.append((-1, dim-1))
+        field_bounds.append((0, dim))
 
       if num_deferred > 0:
         # Use an unrealized conversion to pop in the array size information here
@@ -750,6 +750,11 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
     lb=experimental_stencil.IndexAttr.get(*([0]*len(array_sizes)))
     ub=experimental_stencil.IndexAttr.get(*[v for v in array_sizes])
     el_type=try_translate_type(field.type.element_type)
+
+    field_bounds=[]
+    for dim in array_sizes:
+      field_bounds.append((0, dim))
+
     if num_deferred > 0:
       # Use an unrealized conversion to pop in the array size information here
       in_type=ctx[field.var_name.data].typ
