@@ -14,7 +14,6 @@ from psy.rewrite_fir_to_standard import RewriteFIRToStandard
 
 from psy.dialects.psy_ir import psyIR
 from psy.dialects.psy_stencil import psyStencil
-from ftn.dialects.fir import FIR
 from util.semantic_error import SemanticError
 
 from pathlib import Path
@@ -52,7 +51,6 @@ class PsyOptMain(xDSLOptMain):
         """Register all dialects that can be used."""
         self.ctx.register_dialect(psyIR)
         self.ctx.register_dialect(psyStencil)
-        self.ctx.register_dialect(FIR)
 
     @staticmethod
     def get_passes_as_dict(

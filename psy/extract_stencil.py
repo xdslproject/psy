@@ -1,7 +1,6 @@
 from abc import ABC
 from typing import TypeVar, cast
 from dataclasses import dataclass
-from ftn.dialects import fir
 import itertools
 from xdsl.utils.hints import isa
 from xdsl.dialects.memref import MemRefType
@@ -13,7 +12,7 @@ from xdsl.pattern_rewriter import (RewritePattern, PatternRewriter,
                                    GreedyRewritePatternApplier)
 from xdsl.passes import ModulePass
 from xdsl.dialects import builtin, func, llvm, arith
-from xdsl.dialects.experimental import stencil
+from xdsl.dialects.experimental import stencil, fir
 from xdsl.dialects import stencil as dialect_stencil
 
 
@@ -145,7 +144,7 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
       for key, value in itertools.chain(input_args_to_ops.items(), output_args_to_ops.items()):
           external_load_op=ExtractStencilOps.find_ExternalLoad(value)
           if external_load_op is not None:
-            nt=self.get_nested_type(external_load_op.field.typ, fir.ArrayType)
+            nt=self.get_nested_type(external_load_op.field.typ, fir.SequenceType)
             ptr_type=fir.LLVMPointerType([nt.type])
             op_types.append(ptr_type)
             if isinstance(external_load_op.field.owner, builtin.UnrealizedConversionCastOp):
@@ -276,7 +275,7 @@ class ConnectExternalLoadToFunctionInput(RewritePattern):
     # If this already accepts a memref then don't need to wrap pointer
     if isinstance(op.field.typ, MemRefType): return
 
-    array_type=ConnectExternalLoadToFunctionInput.get_nested_type(op.field.typ, fir.ArrayType)
+    array_type=ConnectExternalLoadToFunctionInput.get_nested_type(op.field.typ, fir.SequenceType)
     number_dims=len(array_type.shape.data)
 
     op_list=[sop for sop in op.parent.ops]
@@ -294,7 +293,7 @@ class ConnectExternalLoadToFunctionInput(RewritePattern):
     # If this is not already an LLVM pointer then extract out the scalar type and type to
     # be an LLVM pointer to this
     if not isinstance(ptr_type, llvm.LLVMPointerType):
-      nt=ConnectExternalLoadToFunctionInput.get_nested_type(ptr_type, fir.ArrayType)
+      nt=ConnectExternalLoadToFunctionInput.get_nested_type(ptr_type, fir.SequenceType)
       ptr_type=llvm.LLVMPointerType.typed(nt.type)
 
     array_typ=llvm.LLVMArrayType.from_size_and_type(builtin.IntAttr(number_dims), builtin.i64)

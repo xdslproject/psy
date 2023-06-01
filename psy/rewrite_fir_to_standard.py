@@ -1,7 +1,7 @@
 from abc import ABC
 from typing import TypeVar, cast
 from dataclasses import dataclass
-from ftn.dialects import fir
+from xdsl.dialects.experimental import fir
 from xdsl.utils.hints import isa
 from xdsl.dialects.memref import MemRefType
 from xdsl.ir import Operation, SSAValue, OpResult, Attribute, MLContext, Block, Region
