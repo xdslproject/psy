@@ -2,7 +2,7 @@ from __future__ import annotations
 from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerType, ArrayAttr, i32, i64, f32, f64, f16, IndexType, DictionaryAttr, IntAttr,
       Float16Type, Float32Type, Float64Type, FloatAttr, UnitAttr, DenseIntOrFPElementsAttr, SymbolRefAttr, AnyFloat, TupleType, UnrealizedConversionCastOp)
 from xdsl.dialects import func, arith, cf, mpi #, gpu
-from xdsl.dialects.experimental import math
+from xdsl.dialects.experimental import math, fir
 from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext, BlockArgument
 from psy.dialects import psy_ir, psy_stencil #, hpc_gpu
 from xdsl.dialects.experimental import stencil as experimental_stencil
@@ -11,7 +11,6 @@ from xdsl.dialects.llvm import LLVMPointerType
 from xdsl.passes import ModulePass
 from util.list_ops import flatten
 import uuid
-from ftn.dialects import fir
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Dict
 import copy
@@ -167,7 +166,7 @@ def get_program_entry_point(module: ModuleOp):
 def apply_environment_to_module(module: ModuleOp):
   if not check_has_environment(module):
     # No environment, therefore we need to insert this
-    array_type=fir.ArrayType.from_two_type(fir.ReferenceType([IntegerType(8)]), fir.ReferenceType([IntegerType(8)]))
+    array_type=fir.SequenceType(fir.ReferenceType([IntegerType(8)]), type2=fir.ReferenceType([IntegerType(8)]))
     tuple_type=TupleType([i32, fir.ReferenceType([array_type])])
     typ=fir.ReferenceType([tuple_type])
     zero_bits=fir.ZeroBits.create(result_types=[typ])
@@ -266,7 +265,7 @@ def translate_fun_def(ctx: SSAValueCtx,
     arg_names=[]
     for arg in routine_def.args.data:
       translated_type=try_translate_type(arg.type)
-      if isinstance(translated_type, fir.ArrayType) and translated_type.hasDeferredShape():
+      if isinstance(translated_type, fir.SequenceType) and translated_type.hasDeferredShape():
         # If this is an array with a deferred type then wrap it in a box as this will
         # contain parameter size information that is passed by the caller
         arg_type=fir.BoxType([translated_type])
@@ -519,7 +518,7 @@ def try_translate_type(op: Operation) -> Optional[Attribute]:
           i+=1
         i+=1
 
-      arrayType=fir.ArrayType.from_type_and_list(try_translate_type(op.element_type), array_size)
+      arrayType=fir.SequenceType(try_translate_type(op.element_type), array_size)
       return arrayType
 
     return None
@@ -609,12 +608,12 @@ def interogate_stencil_field_inference_sizes(var_name, ops):
   return get_size_from_lb_ub_array(deferred_array_info.shape.data)
 
 def rebuild_deferred_fir_array_with_bounds(in_type, array_sizes):
-  array_type=get_nested_type(in_type, fir.ArrayType)
+  array_type=get_nested_type(in_type, fir.SequenceType)
   new_shape=[IntegerAttr(size, 64) for size in array_sizes]
-  new_array=fir.ArrayType.from_type_and_list(array_type.type, new_shape)
+  new_array=fir.SequenceType(array_type.type, new_shape)
 
   to_add=new_array
-  parent_type=fir.ArrayType
+  parent_type=fir.SequenceType
   while True:
     parent=get_nested_parent_type(in_type, parent_type)
     if parent is None: break
@@ -705,17 +704,22 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
       lb=experimental_stencil.IndexAttr.get(*([-1]*len(array_sizes)))
       ub=experimental_stencil.IndexAttr.get(*[v-1 for v in array_sizes])
       el_type=try_translate_type(field.type.element_type)
+
+      field_bounds=[]
+      for dim in array_sizes:
+        field_bounds.append((-1, dim-1))
+
       if num_deferred > 0:
         # Use an unrealized conversion to pop in the array size information here
         in_type=ctx[field.var_name.data].typ
         explicit_size_type=rebuild_deferred_fir_array_with_bounds(in_type, array_sizes)
         unreconciled_conv_op=UnrealizedConversionCastOp.create(operands=[ctx[field.var_name.data]], result_types=[explicit_size_type])
-        external_load_op=experimental_stencil.ExternalLoadOp.get(unreconciled_conv_op.results[0], experimental_stencil.FieldType(array_sizes, el_type))
+        external_load_op=experimental_stencil.ExternalLoadOp.get(unreconciled_conv_op.results[0], experimental_stencil.FieldType(field_bounds, el_type))
         ops+=[unreconciled_conv_op, external_load_op]
       else:
-        external_load_op=experimental_stencil.ExternalLoadOp.get(ctx[field.var_name.data], experimental_stencil.FieldType(array_sizes, el_type))
+        external_load_op=experimental_stencil.ExternalLoadOp.get(ctx[field.var_name.data], experimental_stencil.FieldType(field_bounds, el_type))
         ops+=[external_load_op]
-      cast_op=stencil.CastOp.get(external_load_op.results[0], lb, ub, external_load_op.results[0].typ)
+      cast_op=stencil.CastOp.get(external_load_op.results[0], experimental_stencil.StencilBoundsAttr(field_bounds), external_load_op.results[0].typ)
       input_cast_ops[field.var_name.data]=cast_op
       load_op=experimental_stencil.LoadOp.get(cast_op.results[0], lb, ub)
       ops+=[cast_op, load_op]
@@ -751,12 +755,12 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
       in_type=ctx[field.var_name.data].typ
       explicit_size_type=rebuild_deferred_fir_array_with_bounds(in_type, array_sizes)
       unreconciled_conv_op=UnrealizedConversionCastOp.create(operands=[ctx[field.var_name.data]], result_types=[explicit_size_type])
-      external_load_op=experimental_stencil.ExternalLoadOp.get(unreconciled_conv_op.results[0], experimental_stencil.FieldType(array_sizes, el_type))
+      external_load_op=experimental_stencil.ExternalLoadOp.get(unreconciled_conv_op.results[0], experimental_stencil.FieldType(field_bounds, el_type))
       ops+=[unreconciled_conv_op, external_load_op]
     else:
-      external_load_op=experimental_stencil.ExternalLoadOp.get(ctx[field.var_name.data], experimental_stencil.FieldType(array_sizes, el_type))
+      external_load_op=experimental_stencil.ExternalLoadOp.get(ctx[field.var_name.data], experimental_stencil.FieldType(field_bounds, el_type))
       ops+=[external_load_op]
-    output_field_cast_op=stencil.CastOp.get(external_load_op.results[0], lb, ub, external_load_op.results[0].typ)
+    output_field_cast_op=stencil.CastOp.get(external_load_op.results[0], experimental_stencil.StencilBoundsAttr(field_bounds), external_load_op.results[0].typ)
     output_field_cast_ops.append((output_field_cast_op, external_load_op))
     ops+=[output_field_cast_op]
     #new_ctx[field.var_name.data]=output_field_cast_op.results[0]
@@ -808,7 +812,7 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
 
   stencil_temptypes=[]
   for result_ssa_val in result_ssa_vals:
-    stencil_temptypes.append(experimental_stencil.TempType([-1] * len(array_sizes), result_ssa_val.typ))
+    stencil_temptypes.append(experimental_stencil.TempType(field_bounds, result_ssa_val.typ))
   apply_op=experimental_stencil.ApplyOp.get(block_ops, block, stencil_temptypes, lb, ub)
 
   ops.append(apply_op)
@@ -1100,7 +1104,7 @@ def translate_mpi_buffer(ctx: SSAValueCtx, ops: psy_ir.ExprName, program_state :
     assert isinstance(ops, psy_ir.ExprName)
     ptr_type=try_translate_type(ops.var.type)
     # Pointer type needs to be base type which might be wrapped in an array
-    if isinstance(ptr_type, fir.ArrayType): ptr_type=ptr_type.type
+    if isinstance(ptr_type, fir.SequenceType): ptr_type=ptr_type.type
 
     buffer_op, buffer_arg = translate_expr(ctx, ops, program_state)
     if not isinstance(buffer_arg.typ, fir.ReferenceType):
@@ -1283,7 +1287,7 @@ def translate_timer_start_intrinsic_call_expr(ctx: SSAValueCtx,
     assert isinstance(arg_ctrl.owner, fir.Load)
     assert arg_ctrl.owner.memref.typ == fir.ReferenceType([i32])
 
-    deferred_char_type=fir.ReferenceType([fir.CharType([fir.IntAttr(1), fir.DeferredAttr()])])
+    deferred_char_type=fir.ReferenceType([fir.CharacterType([fir.IntAttr(1), fir.DeferredAttr()])])
     convert_op=fir.Convert.create(operands=[arg_desc], result_types=[deferred_char_type])
 
 
@@ -1349,7 +1353,7 @@ def translate_print_intrinsic_call_expr(ctx: SSAValueCtx,
           print_ops=generatePrintForIntegerOrFloat(program_state, load_op, load_op.results[0], call1.results[0])
           arg_operands.append(ops.first)
           arg_operands.extend(print_ops)
-        if isinstance(arg.typ.type, fir.CharType):
+        if isinstance(arg.typ.type, fir.CharacterType):
           # This is a reference to a string
           arg_operands.extend(generatePrintForString(program_state, op[0], arg, call1.results[0]))
 
@@ -1419,7 +1423,7 @@ def translate_deallocate_intrinsic_call_expr(ctx: SSAValueCtx,
 
     box_type=get_nested_type(target_ssa.typ, fir.BoxType)
     heap_type=get_nested_type(target_ssa.typ, fir.HeapType)
-    array_type=get_nested_type(target_ssa.typ, fir.ArrayType)
+    array_type=get_nested_type(target_ssa.typ, fir.SequenceType)
     num_deferred=count_array_type_contains_deferred(array_type)
 
     load_op=fir.Load.create(operands=[target_ssa], result_types=[box_type])
@@ -1459,7 +1463,7 @@ def translate_allocate_intrinsic_call_expr(ctx: SSAValueCtx,
         ops.append(convert_op)
         args.append(convert_op.results[0])
     heap_type=get_nested_type(target_ssa.typ, fir.HeapType)
-    array_type=get_nested_type(target_ssa.typ, fir.ArrayType)
+    array_type=get_nested_type(target_ssa.typ, fir.SequenceType)
 
     allocmem_op=fir.Allocmem.build(attributes={"in_type":array_type, "uniq_name": StringAttr(var_name+".alloc")}, operands=[[], args], regions=[[]], result_types=[heap_type])
     shape_op=fir.Shape.create(operands=args, result_types=[fir.ShapeType([IntAttr(len(args))])])
@@ -1494,7 +1498,7 @@ def translate_user_call_expr(ctx: SSAValueCtx,
         op, arg = translate_expr(ctx, arg, program_state)
         if op is not None: ops += op
         type_to_reference=arg.typ
-        if not isinstance(type_to_reference, fir.ReferenceType) and not isinstance(type_to_reference, fir.ArrayType):
+        if not isinstance(type_to_reference, fir.ReferenceType) and not isinstance(type_to_reference, fir.SequenceType):
           if isinstance(type_to_reference, fir.HeapType):
             type_to_reference=type_to_reference.type
             convert_op=fir.Convert.create(operands=[arg], result_types=[fn_info.args[index]])
@@ -1510,7 +1514,7 @@ def translate_user_call_expr(ctx: SSAValueCtx,
           if isinstance(fn_info.args[index], fir.BoxType) and isinstance(type_to_reference, fir.ReferenceType):
             # We have a local array that is a reference array, but the calling function accepts a box as it
             # uses assumed sizes for the size of the array
-            array_type=get_nested_type(type_to_reference, fir.ArrayType)
+            array_type=get_nested_type(type_to_reference, fir.SequenceType)
             val=array_type.shape.data[0].value.data
             constant_op=arith.Constant.create(attributes={"value": IntegerAttr.from_index_int_value(val)}, result_types=[IndexType()])
             shape_op=fir.Shape.create(operands=[constant_op.results[0]], result_types=[fir.ShapeType([IntAttr(1)])])
@@ -1568,17 +1572,17 @@ def try_translate_expr(
       has_nested_type = hasattr(ssa_value.typ, "type")
       assert isinstance(ssa_value, SSAValue)
       # We are limited here with type handling, need other floats - maybe a better way of doing this?
-      if isinstance(ssa_value.typ, fir.ArrayType):
+      if isinstance(ssa_value.typ, fir.SequenceType):
         return None, ssa_value
       elif isinstance(ssa_value.typ, mpi.VectorType):
         return None, ssa_value
-      elif isinstance(ssa_value.typ, IntegerType) or (has_nested_type and isinstance(ssa_value.typ.type, fir.IntegerType)):
+      elif isinstance(ssa_value.typ, IntegerType) or (has_nested_type and isinstance(ssa_value.typ.type, IntegerType)):
         result_type=i32
-      elif isinstance(ssa_value.typ, Float32Type) or (has_nested_type and isinstance(ssa_value.typ.type, fir.Float32Type)):
+      elif isinstance(ssa_value.typ, Float32Type) or (has_nested_type and isinstance(ssa_value.typ.type, Float32Type)):
         result_type=f32
-      elif isinstance(ssa_value.typ, Float64Type) or (has_nested_type and isinstance(ssa_value.typ.type, fir.Float64Type)):
+      elif isinstance(ssa_value.typ, Float64Type) or (has_nested_type and isinstance(ssa_value.typ.type, Float64Type)):
         result_type=f64
-      elif isinstance(ssa_value.typ, fir.ArrayType) or (has_nested_type and isinstance(ssa_value.typ.type, fir.ArrayType)):
+      elif isinstance(ssa_value.typ, fir.SequenceType) or (has_nested_type and isinstance(ssa_value.typ.type, fir.SequenceType)):
         # Already have created the addressof reference so just return this
         return None, ssa_value
       elif isinstance(ssa_value.typ.type, fir.BoxType):
@@ -1639,7 +1643,7 @@ def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, 
     # We need to debox this
     box_type=get_nested_type(ctx[op.var.var_name.data].typ, fir.BoxType)
     heap_type=get_nested_type(ctx[op.var.var_name.data].typ, fir.HeapType)
-    array_type=get_nested_type(ctx[op.var.var_name.data].typ, fir.ArrayType)
+    array_type=get_nested_type(ctx[op.var.var_name.data].typ, fir.SequenceType)
 
     load_op=fir.Load.create(operands=[ctx[op.var.var_name.data]], result_types=[box_type])
 
@@ -1652,7 +1656,7 @@ def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, 
       ops_to_add+=[dim_constant_op, box_addr_op]
 
     boxaddr_op=fir.BoxAddr.create(operands=[load_op.results[0]], result_types=[heap_type])
-    fir_type=fir.ArrayType.from_type_and_list(array_type.type, [fir.DeferredAttr()])
+    fir_type=fir.SequenceType(array_type.type, [fir.DeferredAttr()])
 
     convert_to_1d_op=fir.Convert.create(operands=[boxaddr_op.results[0]], result_types=[fir.ReferenceType([fir_type])])
 
@@ -1671,12 +1675,12 @@ def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, 
         expressions.append(index_conv)
         ssa=index_conv.results[0]
 
-      substract_expr=arith.Subi.get(ssa, boxdims_ops[idx].results[0])
+      substract_expr=arith.Subi(ssa, boxdims_ops[idx].results[0])
       expressions.append(substract_expr)
 
       prev_dim=substract_expr.results[0]
       for i in range(0, idx):
-        multiply_op=arith.Muli.get(boxdims_ops[i].results[1], prev_dim)
+        multiply_op=arith.Muli(boxdims_ops[i].results[1], prev_dim)
         expressions.append(multiply_op)
         prev_dim=multiply_op.results[0]
 
@@ -1721,7 +1725,7 @@ def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, 
       else:
         rhs_ssa=subtraction_index.results[0]
 
-      substract_expr=arith.Subi.get(lhs_ssa, rhs_ssa)
+      substract_expr=arith.Subi(lhs_ssa, rhs_ssa)
       expressions.append(substract_expr)
       ssa_list.append(substract_expr.results[0])
 
@@ -1890,7 +1894,7 @@ def get_arith_instance(operation:str, lhs, rhs, program_state : ProgramState):
 
     attributes=dir(op_instance)
     if "get" in attributes:
-      return op_instance(lhs, rhs)
+      return op_instance.get(lhs, rhs)
     else:
       return op_instance(lhs, rhs)
 
@@ -1926,7 +1930,7 @@ def translate_literal(op: psy_ir.Literal, program_state : ProgramState) -> Opera
 
 def generate_string_literal(string, program_state : ProgramState) -> Operation:
     string_literal=string.replace("\"", "")
-    typ=fir.CharType([fir.IntAttr(1), fir.IntAttr(len(string_literal))])
+    typ=fir.CharacterType([fir.IntAttr(1), fir.IntAttr(len(string_literal))])
     string_lit_op=fir.StringLit.create(attributes={"size": IntegerAttr.from_int_and_width(len(string_literal), 64), "value": StringAttr(string_literal)}, result_types=[typ])
     has_val_op=fir.HasValue.create(operands=[string_lit_op.results[0]])
     str_uuid=uuid.uuid4().hex.upper()
