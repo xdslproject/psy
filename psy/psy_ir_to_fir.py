@@ -1742,6 +1742,12 @@ def translate_nary_expr(ctx: SSAValueCtx,
   ops_to_add=[]
   for op in unary_expr.expr.blocks[0].ops:
     expr, expr_ssa_value = translate_expr(ctx, op, program_state)
+
+    if isinstance(expr_ssa_value.typ, fir.ReferenceType):
+      load_op=fir.Load.create(operands=[expr_ssa_value], result_types=[expr_ssa_value.typ.type])
+      expr.append(load_op)
+      expr_ssa_value=load_op.results[0]
+
     if ssa_type is None:
       ssa_type=expr_ssa_value.typ
     if ssa_type != expr_ssa_value.typ:
@@ -1771,6 +1777,11 @@ def translate_unary_expr(ctx: SSAValueCtx,
         unary_expr: psy_ir.UnaryOperation, program_state : ProgramState) -> Tuple[List[Operation], SSAValue]:
 
   expr, expr_ssa_value = translate_expr(ctx, unary_expr.expr.blocks[0].ops.first, program_state)
+
+  if isinstance(expr_ssa_value.typ, fir.ReferenceType):
+    load_op=fir.Load.create(operands=[expr_ssa_value], result_types=[expr_ssa_value.typ.type])
+    expr.append(load_op)
+    expr_ssa_value=load_op.results[0]
 
   attr = unary_expr.op
   assert isinstance(attr, Attribute)
