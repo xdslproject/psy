@@ -20,10 +20,12 @@ from xdsl.dialects import stencil as dialect_stencil
 class _StencilExtractorRewriteBase(RewritePattern, ABC):
   bridgedFunctions: dict[str, Operation]
   bridge_id: int
+  actioned: bool
 
   def __init__(self):
     self.bridgedFunctions={}
     self.bridge_id=0
+    self.actioned=False
 
   def get_nested_type(self, in_type, search_type):
     if isinstance(in_type, search_type): return in_type
@@ -107,8 +109,18 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
       convert_op=fir.Convert.create(operands=[box_addr_op.results[0]], result_types=[ptr_type])
       return [load_op, box_addr_op, convert_op], convert_op
 
+    def getFuncOpContainer(op):
+      if op is None: return None
+      if isinstance(op, func.FuncOp): return op
+      parent_op=op.parent.parent.parent
+      return ExtractStencilOps.getFuncOpContainer(parent_op)
+
     @op_type_rewrite_pattern
     def match_and_rewrite(self, apply_stencil_op: stencil.ApplyOp, rewriter: PatternRewriter, /):
+      parent_func=ExtractStencilOps.getFuncOpContainer(apply_stencil_op)
+      assert parent_func is not None and isinstance(parent_func, func.FuncOp)
+      if "_InternalBridgeStencil_" in parent_func.sym_name.data: return
+
       input_args_to_ops={}
       stencil_ops=[]
       for input_arg in apply_stencil_op.args:
@@ -194,6 +206,7 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
         rewriter.replace_matched_op(new_stencil)
 
       self.bridgedFunctions[function_name]=stencil_bridge_fn
+      self.actioned=True
 
 class AddExternalFuncDefs(RewritePattern):
     """
@@ -371,6 +384,10 @@ class ExtractStencil(ModulePass):
     ]),
                                    apply_recursively=False)
     walker1.rewrite_module(module)
+
+    while extractStencil.actioned:
+      extractStencil.actioned=False
+      walker1.rewrite_module(module)
 
     # Now add in external function signature for new bridged functions
     bridged_fn_names=[v for v in extractStencil.bridgedFunctions.keys()]
