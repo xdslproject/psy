@@ -701,13 +701,13 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
 
       # For now hack these in, as need to ensure memref cast that is generated is of correct size of
       # input array
-      lb=experimental_stencil.IndexAttr.get(*([0]*len(array_sizes)))
-      ub=experimental_stencil.IndexAttr.get(*[v for v in array_sizes])
+      lb=experimental_stencil.IndexAttr.get(*([-1]*len(array_sizes)))
+      ub=experimental_stencil.IndexAttr.get(*[v-1 for v in array_sizes])
       el_type=try_translate_type(field.type.element_type)
 
       field_bounds=[]
       for dim in array_sizes:
-        field_bounds.append((0, dim))
+        field_bounds.append((-1, dim-1))
 
       if num_deferred > 0:
         # Use an unrealized conversion to pop in the array size information here
@@ -753,7 +753,7 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
 
     field_bounds=[]
     for dim in array_sizes:
-      field_bounds.append((0, dim))
+      field_bounds.append((-1, dim-1))
 
     if num_deferred > 0:
       # Use an unrealized conversion to pop in the array size information here
@@ -810,15 +810,14 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
 
   block.add_ops(stencil_contents)
 
-  # With the from bounds we minus one to go into zero indexing regime
-  from_bounds=[el.data-1 for el in stencil_stmt.from_bounds]
-  lb=experimental_stencil.IndexAttr.get(*from_bounds)
-  ub=experimental_stencil.IndexAttr.get(*stencil_stmt.to_bounds)
+  field_bounds=[]
+  for dim in array_sizes:
+    field_bounds.append((1, dim-1))
 
   stencil_temptypes=[]
   for result_ssa_val in result_ssa_vals:
     stencil_temptypes.append(experimental_stencil.TempType(field_bounds, result_ssa_val.typ))
-  apply_op=experimental_stencil.ApplyOp.get(block_ops, block, stencil_temptypes, lb, ub)
+  apply_op=experimental_stencil.ApplyOp.get(block_ops, block, stencil_temptypes)
 
   ops.append(apply_op)
 
