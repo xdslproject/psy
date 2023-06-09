@@ -5,7 +5,6 @@ from xdsl.dialects import func, arith, cf, mpi #, gpu
 from xdsl.dialects.experimental import math, fir
 from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext, BlockArgument
 from psy.dialects import psy_ir, psy_stencil #, hpc_gpu
-from xdsl.dialects.experimental import stencil as experimental_stencil
 from xdsl.dialects import stencil
 from xdsl.dialects.llvm import LLVMPointerType
 from xdsl.passes import ModulePass
@@ -570,7 +569,7 @@ def translate_psy_stencil_access(ctx: SSAValueCtx, stencil_access: Operation, pr
   el_type=try_translate_type(stencil_access.var.type.element_type)
   assert el_type is not None
   offsets=([value.data for value in stencil_access.stencil_ops.data])
-  access_op=experimental_stencil.AccessOp.get(ctx[stencil_access.var.var_name.data], offsets)
+  access_op=stencil.AccessOp.get(ctx[stencil_access.var.var_name.data], offsets)
   return [access_op], access_op.results[0]
 
 def get_array_sizes(array_type):
@@ -588,7 +587,7 @@ def get_stencil_data_range(bounds_array, relative_offset, further_offset=0):
   range_vals=[]
   for rel_offset, d in zip(relative_offset, bounds_array):
     range_vals.append(d.data + rel_offset.data + further_offset)
-  return experimental_stencil.IndexAttr.get(*range_vals)
+  return stencil.IndexAttr.get(*range_vals)
 
 def find_ops_with_type(ops, op_type):
   located_ops=[]
@@ -632,15 +631,15 @@ def translate_psy_stencil_result(ctx: SSAValueCtx, stencil_result: Operation, pr
   assert isinstance(stencil_result.out_field.type, psy_ir.ArrayType)
   el_type=try_translate_type(stencil_result.out_field.type.element_type)
   assert el_type is not None
-  rt=experimental_stencil.ResultType(el_type)
+  rt=stencil.ResultType(el_type)
 
   if el_type != ops[-1].results[0].typ:
     data_conv_op=perform_data_conversion_if_needed(ops[-1].results[0], el_type)
-    #return_op=experimental_stencil.ReturnOp.get([data_conv_op.results[0]])
+    #return_op=stencil.ReturnOp.get([data_conv_op.results[0]])
     ops+=[data_conv_op]
     return ops, data_conv_op.results[0]
   else:
-    #return_op=experimental_stencil.ReturnOp.get([ops[-1].results[0]])
+    #return_op=stencil.ReturnOp.get([ops[-1].results[0]])
     #ops+=[return_op]
     return ops, ops[-1].results[0]
 
@@ -666,10 +665,10 @@ def translate_psy_stencil_result(ctx: SSAValueCtx, stencil_result: Operation, pr
   for el in stencil_op.to_bounds.data:
     ub_ints.append(el.data)
 
-  lb=experimental_stencil.IndexAttr.get(*lb_ints)
-  ub=experimental_stencil.IndexAttr.get(*ub_ints)
-  stencil_temptype=experimental_stencil.TempType([-1] * len(array_sizes), el_type)
-  apply_op=experimental_stencil.ApplyOp.get(block_ops, block, [stencil_temptype], lb, ub)
+  lb=stencil.IndexAttr.get(*lb_ints)
+  ub=stencil.IndexAttr.get(*ub_ints)
+  stencil_temptype=stencil.TempType([-1] * len(array_sizes), el_type)
+  apply_op=stencil.ApplyOp.get(block_ops, block, [stencil_temptype], lb, ub)
 
   return [apply_op]
 
@@ -701,8 +700,8 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
 
       # For now hack these in, as need to ensure memref cast that is generated is of correct size of
       # input array
-      lb=experimental_stencil.IndexAttr.get(*([-1]*len(array_sizes)))
-      ub=experimental_stencil.IndexAttr.get(*[v-1 for v in array_sizes])
+      lb=stencil.IndexAttr.get(*([-1]*len(array_sizes)))
+      ub=stencil.IndexAttr.get(*[v-1 for v in array_sizes])
       el_type=try_translate_type(field.type.element_type)
 
       field_bounds=[]
@@ -714,14 +713,14 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
         in_type=ctx[field.var_name.data].typ
         explicit_size_type=rebuild_deferred_fir_array_with_bounds(in_type, array_sizes)
         unreconciled_conv_op=UnrealizedConversionCastOp.create(operands=[ctx[field.var_name.data]], result_types=[explicit_size_type])
-        external_load_op=experimental_stencil.ExternalLoadOp.get(unreconciled_conv_op.results[0], experimental_stencil.FieldType(field_bounds, el_type))
+        external_load_op=stencil.ExternalLoadOp.get(unreconciled_conv_op.results[0], stencil.FieldType(field_bounds, el_type))
         ops+=[unreconciled_conv_op, external_load_op]
       else:
-        external_load_op=experimental_stencil.ExternalLoadOp.get(ctx[field.var_name.data], experimental_stencil.FieldType(field_bounds, el_type))
+        external_load_op=stencil.ExternalLoadOp.get(ctx[field.var_name.data], stencil.FieldType(field_bounds, el_type))
         ops+=[external_load_op]
-      cast_op=stencil.CastOp.get(external_load_op.results[0], experimental_stencil.StencilBoundsAttr(field_bounds), external_load_op.results[0].typ)
+      cast_op=stencil.CastOp.get(external_load_op.results[0], stencil.StencilBoundsAttr(field_bounds), external_load_op.results[0].typ)
       input_cast_ops[field.var_name.data]=cast_op
-      load_op=experimental_stencil.LoadOp.get(cast_op.results[0], lb, ub)
+      load_op=stencil.LoadOp.get(cast_op.results[0], lb, ub)
       ops+=[cast_op, load_op]
       new_ctx[field.var_name.data]=load_op.results[0]
     elif isinstance(field.type, psy_ir.NamedType):
@@ -747,8 +746,8 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
     else:
       array_sizes=interogate_stencil_field_inference_sizes(field.var_name.data, stencil_stmt.body.blocks[0].ops)
 
-    lb=experimental_stencil.IndexAttr.get(*([0]*len(array_sizes)))
-    ub=experimental_stencil.IndexAttr.get(*[v for v in array_sizes])
+    lb=stencil.IndexAttr.get(*([0]*len(array_sizes)))
+    ub=stencil.IndexAttr.get(*[v for v in array_sizes])
     el_type=try_translate_type(field.type.element_type)
 
     field_bounds=[]
@@ -760,12 +759,12 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
       in_type=ctx[field.var_name.data].typ
       explicit_size_type=rebuild_deferred_fir_array_with_bounds(in_type, array_sizes)
       unreconciled_conv_op=UnrealizedConversionCastOp.create(operands=[ctx[field.var_name.data]], result_types=[explicit_size_type])
-      external_load_op=experimental_stencil.ExternalLoadOp.get(unreconciled_conv_op.results[0], experimental_stencil.FieldType(field_bounds, el_type))
+      external_load_op=stencil.ExternalLoadOp.get(unreconciled_conv_op.results[0], stencil.FieldType(field_bounds, el_type))
       ops+=[unreconciled_conv_op, external_load_op]
     else:
-      external_load_op=experimental_stencil.ExternalLoadOp.get(ctx[field.var_name.data], experimental_stencil.FieldType(field_bounds, el_type))
+      external_load_op=stencil.ExternalLoadOp.get(ctx[field.var_name.data], stencil.FieldType(field_bounds, el_type))
       ops+=[external_load_op]
-    output_field_cast_op=stencil.CastOp.get(external_load_op.results[0], experimental_stencil.StencilBoundsAttr(field_bounds), external_load_op.results[0].typ)
+    output_field_cast_op=stencil.CastOp.get(external_load_op.results[0], stencil.StencilBoundsAttr(field_bounds), external_load_op.results[0].typ)
     output_field_cast_ops.append((output_field_cast_op, external_load_op))
     ops+=[output_field_cast_op]
     #new_ctx[field.var_name.data]=output_field_cast_op.results[0]
@@ -805,7 +804,7 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
       stencil_contents+=result_ops
       result_ssa_vals.append(ssa_result)
 
-  return_op=experimental_stencil.ReturnOp.get(result_ssa_vals)
+  return_op=stencil.ReturnOp.get(result_ssa_vals)
   stencil_contents.append(return_op)
 
   block.add_ops(stencil_contents)
@@ -816,17 +815,17 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
 
   stencil_temptypes=[]
   for result_ssa_val in result_ssa_vals:
-    stencil_temptypes.append(experimental_stencil.TempType(field_bounds, result_ssa_val.typ))
-  apply_op=experimental_stencil.ApplyOp.get(block_ops, block, stencil_temptypes)
+    stencil_temptypes.append(stencil.TempType(field_bounds, result_ssa_val.typ))
+  apply_op=stencil.ApplyOp.get(block_ops, block, stencil_temptypes)
 
   ops.append(apply_op)
 
   for index, out_tuple in enumerate(output_field_cast_ops):
     out_var_name=stencil_stmt.output_fields.data[index].var_name.data
-    lb_indexes=experimental_stencil.IndexAttr.get(*([0] * len(array_sizes)))
-    ub_indexes=experimental_stencil.IndexAttr.get(*array_sizes)
-    store_op=experimental_stencil.StoreOp.get(apply_op.results[index], out_tuple[0].results[0], lb_indexes, ub_indexes)
-    external_store_op=experimental_stencil.ExternalStoreOp.create(operands=[out_tuple[1].results[0], ctx[out_var_name]])
+    lb_indexes=stencil.IndexAttr.get(*([0] * len(array_sizes)))
+    ub_indexes=stencil.IndexAttr.get(*array_sizes)
+    store_op=stencil.StoreOp.get(apply_op.results[index], out_tuple[0].results[0], lb_indexes, ub_indexes)
+    external_store_op=stencil.ExternalStoreOp.create(operands=[out_tuple[1].results[0], ctx[out_var_name]])
     ops+=[store_op, external_store_op]
 
   return ops
@@ -1601,7 +1600,7 @@ def try_translate_expr(
       return [op], op.results[0]
 
     if isinstance(op, psy_stencil.PsyStencil_DimIndex):
-      stencil_index_op=experimental_stencil.IndexOp.build(attributes={"dim": IntegerAttr(op.index, 32), "offset": experimental_stencil.IndexAttr.get(0,0,0)}, result_types=[IndexType()])
+      stencil_index_op=stencil.IndexOp.build(attributes={"dim": IntegerAttr(op.index, 32), "offset": stencil.IndexAttr.get(0,0,0)}, result_types=[IndexType()])
       target_type=try_translate_type(op.original_type)
       assert target_type is not None
       data_conv_op=perform_data_conversion_if_needed(stencil_index_op.results[0], target_type)

@@ -12,8 +12,8 @@ from xdsl.pattern_rewriter import (RewritePattern, PatternRewriter,
                                    GreedyRewritePatternApplier)
 from xdsl.passes import ModulePass
 from xdsl.dialects import builtin, func, llvm, arith
-from xdsl.dialects.experimental import stencil, fir
-from xdsl.dialects import stencil as dialect_stencil
+from xdsl.dialects.experimental import fir
+from xdsl.dialects import stencil
 
 
 @dataclass
@@ -61,11 +61,11 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
 
     def getOperationsUntilExternalLoadOpFromStencilArg(arg):
       if isinstance(arg.op, stencil.LoadOp) or isinstance(arg.op,
-          dialect_stencil.CastOp) or isinstance(arg.op, stencil.ExternalLoadOp):
+          stencil.CastOp) or isinstance(arg.op, stencil.ExternalLoadOp):
         yield from ExtractStencilOps.getOperationsUntilExternalLoadOpFromStencilArg(arg.op.field)
 
       if isinstance(arg.op, stencil.LoadOp) or isinstance(arg.op,
-          dialect_stencil.CastOp) or isinstance(arg.op, stencil.ExternalLoadOp) or isinstance(arg.op,
+          stencil.CastOp) or isinstance(arg.op, stencil.ExternalLoadOp) or isinstance(arg.op,
           builtin.UnrealizedConversionCastOp):
         yield arg.op
 
