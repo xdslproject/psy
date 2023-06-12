@@ -4,49 +4,49 @@ from dataclasses import dataclass
 from xdsl.dialects.builtin import ArrayAttr, IntAttr
 from psy.dialects.psy_ir import NamedType, DerivedType, ArrayType
 from xdsl.ir import MLContext, Dialect
-from xdsl.irdl import irdl_op_definition, SingleBlockRegion, AnyAttr, OpAttr, IRDLOperation, AnyOf
+from xdsl.irdl import irdl_op_definition, SingleBlockRegion, AnyAttr, attr_def, IRDLOperation, AnyOf, region_def
 
 @irdl_op_definition
 class PsyStencil_Stencil(IRDLOperation):
     name: str = "psy.stencil.stencil"
 
-    input_fields: OpAttr[ArrayAttr]
-    output_fields: OpAttr[ArrayAttr]
-    from_bounds: OpAttr[ArrayAttr]
-    to_bounds: OpAttr[ArrayAttr]
-    min_relative_offset: OpAttr[ArrayAttr]
-    max_relative_offset: OpAttr[ArrayAttr]
-    body: SingleBlockRegion
+    input_fields= attr_def(ArrayAttr)
+    output_fields= attr_def(ArrayAttr)
+    from_bounds= attr_def(ArrayAttr)
+    to_bounds= attr_def(ArrayAttr)
+    min_relative_offset= attr_def(ArrayAttr)
+    max_relative_offset= attr_def(ArrayAttr)
+    body: SingleBlockRegion = region_def("single_block")
 
 @irdl_op_definition
 class PsyStencil_Access(IRDLOperation):
     name: str = "psy.stencil.access"
 
-    var: OpAttr[AnyAttr()]
-    stencil_ops: OpAttr[ArrayAttr]
+    var= attr_def(AnyAttr())
+    stencil_ops= attr_def(ArrayAttr)
 
 @irdl_op_definition
 class PsyStencil_DimIndex(IRDLOperation):
     name: str = "psy.dimension.index"
 
-    index: OpAttr[IntAttr]
-    original_type : OpAttr[AnyOf([NamedType, DerivedType, ArrayType])]
+    index= attr_def(IntAttr)
+    original_type = attr_def(AnyOf([NamedType, DerivedType, ArrayType]))
 
 @irdl_op_definition
 class PsyStencil_DeferredArrayInfo(IRDLOperation):
     name: str = "psy.stencil.deferredarrayinfo"
 
-    var: OpAttr[AnyAttr()]
-    shape: OpAttr[ArrayAttr]
+    var= attr_def(AnyAttr())
+    shape= attr_def(ArrayAttr)
 
 @irdl_op_definition
 class PsyStencil_Result(IRDLOperation):
     name: str = "psy.stencil.result"
 
-    out_field: OpAttr[AnyAttr()]
-    input_fields: OpAttr[ArrayAttr]
-    stencil_ops: OpAttr[ArrayAttr]
-    stencil_accesses: SingleBlockRegion
+    out_field= attr_def(AnyAttr())
+    input_fields= attr_def(ArrayAttr)
+    stencil_ops= attr_def(ArrayAttr)
+    stencil_accesses: SingleBlockRegion = region_def("single_block")
 
 psyStencil = Dialect([
   PsyStencil_Stencil,

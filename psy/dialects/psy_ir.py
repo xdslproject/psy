@@ -6,7 +6,7 @@ from util.list_ops import flatten
 from xdsl.dialects.builtin import IntegerAttr, StringAttr, ArrayAttr, ArrayOfConstraint, AnyAttr, IntAttr, FloatAttr
 from xdsl.ir import Data, MLContext, ParametrizedAttribute, Dialect
 from xdsl.irdl import (AnyOf, ParameterDef, irdl_attr_definition, irdl_op_definition
-                       , OpAttr, SingleBlockRegion, Region, Block, IRDLOperation)
+                       , attr_def, SingleBlockRegion, Region, Block, IRDLOperation, region_def)
 from xdsl.parser import Parser
 from xdsl.printer import Printer
 
@@ -144,8 +144,8 @@ class Token(ParametrizedAttribute):
 class FileContainer(IRDLOperation):
     name = "psy.ir.filecontainer"
 
-    file_name: OpAttr[StringAttr]
-    children: Region
+    file_name= attr_def(StringAttr)
+    children: Region = region_def()
 
     @staticmethod
     def get(file_name: str,
@@ -163,13 +163,13 @@ class FileContainer(IRDLOperation):
 class Container(IRDLOperation):
     name = "psy.ir.container"
 
-    container_name: OpAttr[StringAttr]
-    imports: Region
-    routines: Region
-    default_visibility: OpAttr[StringAttr]
-    is_program: OpAttr[BoolAttr]
-    public_routines: OpAttr[ArrayAttr]
-    private_routines: OpAttr[ArrayAttr]
+    container_name= attr_def(StringAttr)
+    imports: Region = region_def()
+    routines: Region = region_def()
+    default_visibility= attr_def(StringAttr)
+    is_program= attr_def(BoolAttr)
+    public_routines= attr_def(StringAttr)
+    private_routines= attr_def(StringAttr)
 
     @staticmethod
     def get(container_name: str,
@@ -194,8 +194,8 @@ class Container(IRDLOperation):
 class Import(IRDLOperation):
     name = "psy.ir.import"
 
-    import_name: OpAttr[StringAttr]
-    specific_procedures: OpAttr[ArrayAttr]
+    import_name= attr_def(StringAttr)
+    specific_procedures= attr_def(ArrayAttr)
 
     @staticmethod
     def get(import_name: Union[str, StringAttr],
@@ -215,13 +215,13 @@ class Import(IRDLOperation):
 class Routine(IRDLOperation):
     name = "psy.ir.routine"
 
-    routine_name: OpAttr[StringAttr]
-    args: OpAttr[ArrayAttr]
-    return_var: OpAttr[AnyAttr()]
-    is_program: OpAttr[BoolAttr]
-    imports: Region
-    local_var_declarations: Region
-    routine_body: Region
+    routine_name= attr_def(StringAttr)
+    args= attr_def(ArrayAttr)
+    return_var= attr_def(AnyAttr())
+    is_program= attr_def(BoolAttr)
+    imports: Region = region_def()
+    local_var_declarations: Region = region_def()
+    routine_body: Region = region_def()
 
     @staticmethod
     def get(routine_name: Union[str, StringAttr],
@@ -259,8 +259,8 @@ class Routine(IRDLOperation):
 class ArrayReference(IRDLOperation):
     name="psy.ir.array_reference"
 
-    var: OpAttr[AnyAttr()]
-    accessors: Region
+    var= attr_def(AnyAttr())
+    accessors: Region = region_def()
 
     @staticmethod
     def get(var,
@@ -277,8 +277,8 @@ class ArrayReference(IRDLOperation):
 class ExprName(IRDLOperation):
     name = "psy.ir.id_expr"
 
-    id: OpAttr[StringAttr]
-    var: OpAttr[AnyAttr()]
+    id= attr_def(StringAttr)
+    var= attr_def(AnyAttr())
 
     @staticmethod
     def get(name: Union[str, StringAttr], v, verify_op: bool = True) -> ExprName:
@@ -292,8 +292,8 @@ class ExprName(IRDLOperation):
 class StructureReference(IRDLOperation):
     name = "psy.ir.structure_reference"
 
-    var: OpAttr[AnyAttr()]
-    member: OpAttr[AnyAttr()]
+    var= attr_def(AnyAttr())
+    member= attr_def(AnyAttr())
 
     @staticmethod
     def get(var, member: Union[str, StringAttr], verify_op: bool = True) -> ExprName:
@@ -307,10 +307,10 @@ class StructureReference(IRDLOperation):
 class VarDef(IRDLOperation):
     name = "psy.ir.var_def"
 
-    var: OpAttr[AnyAttr()]
-    is_proc_argument: OpAttr[BoolAttr]
-    is_constant: OpAttr[BoolAttr]
-    intent: OpAttr[StringAttr]
+    var= attr_def(AnyAttr())
+    is_proc_argument= attr_def(BoolAttr)
+    is_constant= attr_def(BoolAttr)
+    intent= attr_def(StringAttr)
 
     @staticmethod
     def get(var,
@@ -333,8 +333,8 @@ class VarDef(IRDLOperation):
 class Assign(IRDLOperation):
     name = "psy.ir.assign"
 
-    lhs: Region
-    rhs: Region
+    lhs: Region = region_def()
+    rhs: Region = region_def()
 
     @staticmethod
     def get(lhs: Operation,
@@ -353,7 +353,7 @@ class Assign(IRDLOperation):
 class Literal(IRDLOperation):
     name = "psy.ir.literal"
 
-    value: OpAttr[AnyOf([StringAttr, IntegerAttr, FloatAttr])]
+    value= attr_def(AnyOf([StringAttr, IntegerAttr, FloatAttr]))
 
     @staticmethod
     def get(value: Union[None, bool, int, str, float], width=None,
@@ -376,9 +376,9 @@ class Literal(IRDLOperation):
 class IfBlock(IRDLOperation):
     name = "psy.ir.ifblock"
 
-    cond: Region
-    then: Region
-    orelse: Region
+    cond: Region = region_def()
+    then: Region = region_def()
+    orelse: Region = region_def()
 
     @staticmethod
     def get(cond: Operation,
@@ -398,11 +398,11 @@ class IfBlock(IRDLOperation):
 class Loop(IRDLOperation):
     name = "psy.ir.loop"
 
-    variable: OpAttr[AnyAttr()]
-    start: Region
-    stop: Region
-    step: Region
-    body: Region
+    variable= attr_def(AnyAttr())
+    start: Region = region_def()
+    stop: Region = region_def()
+    step: Region = region_def()
+    body: Region = region_def()
 
     @staticmethod
     def get(variable,
@@ -428,9 +428,9 @@ class Return(IRDLOperation):
 class BinaryOperation(IRDLOperation):
     name = "psy.ir.binaryoperation"
 
-    op: OpAttr[StringAttr]
-    lhs: Region
-    rhs: Region
+    op= attr_def(StringAttr)
+    lhs: Region = region_def()
+    rhs: Region = region_def()
 
     @staticmethod
     def get_valid_ops() -> List[str]:
@@ -468,8 +468,8 @@ class BinaryOperation(IRDLOperation):
 class UnaryOperation(IRDLOperation):
     name = "psy.ir.unaryoperation"
 
-    op: OpAttr[StringAttr]
-    expr: Region
+    op= attr_def(StringAttr)
+    expr: Region = region_def()
 
     @staticmethod
     def get_valid_ops() -> List[str]:
@@ -502,8 +502,8 @@ class UnaryOperation(IRDLOperation):
 class NaryOperation(IRDLOperation):
     name = "psy.ir.naryoperation"
 
-    op: OpAttr[StringAttr]
-    expr: Region
+    op= attr_def(StringAttr)
+    expr: Region = region_def()
 
     @staticmethod
     def get_valid_ops() -> List[str]:
@@ -526,9 +526,9 @@ class NaryOperation(IRDLOperation):
 class Range(IRDLOperation):
     name = "psy.ir.range"
 
-    start: Region
-    stop: Region
-    step: Region
+    start: Region = region_def()
+    stop: Region = region_def()
+    step: Region = region_def()
 
     @staticmethod
     def get(start: List[Operation],
@@ -549,10 +549,10 @@ class Range(IRDLOperation):
 class CallExpr(IRDLOperation):
     name = "psy.ir.call_expr"
 
-    func: OpAttr[StringAttr]
-    intrinsic: OpAttr[BoolAttr]
-    type: OpAttr[AnyOf([NamedType, DerivedType, ArrayType, EmptyAttr])]
-    args: Region
+    func= attr_def(StringAttr)
+    intrinsic= attr_def(BoolAttr)
+    type= attr_def(AnyOf([NamedType, DerivedType, ArrayType, EmptyAttr]))
+    args: Region = region_def()
 
     @staticmethod
     def get(func: str,
