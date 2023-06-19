@@ -698,6 +698,10 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
       else:
         array_sizes=interogate_stencil_field_inference_sizes(field.var_name.data, stencil_stmt.body.blocks[0].ops)
 
+      fortran_array_sizes=array_sizes.copy()
+
+      array_sizes.reverse()
+
       # For now hack these in, as need to ensure memref cast that is generated is of correct size of
       # input array
       lb=stencil.IndexAttr.get(*([-1]*len(array_sizes)))
@@ -711,7 +715,7 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
       if num_deferred > 0:
         # Use an unrealized conversion to pop in the array size information here
         in_type=ctx[field.var_name.data].typ
-        explicit_size_type=rebuild_deferred_fir_array_with_bounds(in_type, array_sizes)
+        explicit_size_type=rebuild_deferred_fir_array_with_bounds(in_type, fortran_array_sizes)
         unreconciled_conv_op=UnrealizedConversionCastOp.create(operands=[ctx[field.var_name.data]], result_types=[explicit_size_type])
         external_load_op=stencil.ExternalLoadOp.get(unreconciled_conv_op.results[0], stencil.FieldType(field_bounds, el_type))
         ops+=[unreconciled_conv_op, external_load_op]
@@ -746,6 +750,10 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
     else:
       array_sizes=interogate_stencil_field_inference_sizes(field.var_name.data, stencil_stmt.body.blocks[0].ops)
 
+    fortran_array_sizes=array_sizes.copy()
+
+    array_sizes.reverse()
+
     lb=stencil.IndexAttr.get(*([0]*len(array_sizes)))
     ub=stencil.IndexAttr.get(*[v for v in array_sizes])
     el_type=try_translate_type(field.type.element_type)
@@ -757,7 +765,7 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
     if num_deferred > 0:
       # Use an unrealized conversion to pop in the array size information here
       in_type=ctx[field.var_name.data].typ
-      explicit_size_type=rebuild_deferred_fir_array_with_bounds(in_type, array_sizes)
+      explicit_size_type=rebuild_deferred_fir_array_with_bounds(in_type, fortran_array_sizes)
       unreconciled_conv_op=UnrealizedConversionCastOp.create(operands=[ctx[field.var_name.data]], result_types=[explicit_size_type])
       external_load_op=stencil.ExternalLoadOp.get(unreconciled_conv_op.results[0], stencil.FieldType(field_bounds, el_type))
       ops+=[unreconciled_conv_op, external_load_op]
