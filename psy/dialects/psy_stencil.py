@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 from xdsl.dialects.builtin import ArrayAttr, IntAttr
 from psy.dialects.psy_ir import NamedType, DerivedType, ArrayType
+from xdsl.traits import NoTerminator, IsTerminator
 from xdsl.ir import MLContext, Dialect
 from xdsl.irdl import irdl_op_definition, SingleBlockRegion, AnyAttr, attr_def, IRDLOperation, AnyOf, region_def, opt_attr_def
 
@@ -17,6 +18,8 @@ class PsyStencil_Stencil(IRDLOperation):
     min_relative_offset= attr_def(ArrayAttr)
     max_relative_offset= attr_def(ArrayAttr)
     body: SingleBlockRegion = region_def("single_block")
+
+    traits = frozenset([NoTerminator()])
 
 @irdl_op_definition
 class PsyStencil_Access(IRDLOperation):
@@ -48,6 +51,8 @@ class PsyStencil_Result(IRDLOperation):
     input_fields= attr_def(ArrayAttr)
     stencil_ops= attr_def(ArrayAttr)
     stencil_accesses: SingleBlockRegion = region_def("single_block")
+
+    traits = frozenset([NoTerminator()])
 
 psyStencil = Dialect([
   PsyStencil_Stencil,
