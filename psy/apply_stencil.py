@@ -239,9 +239,16 @@ class ReplaceStencilDimensionVarWithStencilIndex(RewritePattern):
 
 class ReplaceAbsoluteArrayIndexWithStencil(RewritePattern):
 
-  def generate_stencil_access(array_reference):
+  def __init__(self, index_order):
+      self.index_order=index_order
+
+  def generate_stencil_access(array_reference, index_order=None):
     stencil_relative_offsets=[]
+    index_names=[]
     for accessor in array_reference.accessors.blocks[0].ops:
+      if index_order is not None:
+          assert accessor.var.var_name.data in index_order
+          index_names.append(accessor.var.var_name.data)
       visitor=CollectArrayRelativeOffsets()
       visitor.traverse(accessor)
       if visitor.offset_val is None:
@@ -249,13 +256,21 @@ class ReplaceAbsoluteArrayIndexWithStencil(RewritePattern):
       else:
         stencil_relative_offsets.append(IntAttr(visitor.offset_val))
 
-    access_op=psy_stencil.PsyStencil_Access.build(attributes={"var": array_reference.var, "stencil_ops": ArrayAttr(stencil_relative_offsets)})
+    attributes={"var": array_reference.var, "stencil_ops": ArrayAttr(stencil_relative_offsets)}
+
+    if len(index_names) > 0 and index_order is not None:
+        index_mapping=[]
+        for name in index_names:
+            index_mapping.append(IntAttr(index_order.index(name)))
+        attributes["op_mapping"]=ArrayAttr(index_mapping)
+
+    access_op=psy_stencil.PsyStencil_Access.build(attributes=attributes)
     return access_op
 
   @op_type_rewrite_pattern
   def match_and_rewrite(
             self, array_reference: psy_ir.ArrayReference, rewriter: PatternRewriter):
-    access_op=ReplaceAbsoluteArrayIndexWithStencil.generate_stencil_access(array_reference)
+    access_op=ReplaceAbsoluteArrayIndexWithStencil.generate_stencil_access(array_reference, self.index_order)
     rewriter.replace_op(array_reference, access_op)
 
 class LoopRangeSearcher():
@@ -365,9 +380,9 @@ class ApplyStencilRewriter(RewritePattern):
           rhs.detach()
 
           if isinstance(rhs, psy_ir.ArrayReference):
-            rhs=ReplaceAbsoluteArrayIndexWithStencil.generate_stencil_access(rhs)
+            rhs=ReplaceAbsoluteArrayIndexWithStencil.generate_stencil_access(rhs, list(loop_numeric_bounds.keys()))
           else:
-            replaceArrayIndexWithStencil=ReplaceAbsoluteArrayIndexWithStencil()
+            replaceArrayIndexWithStencil=ReplaceAbsoluteArrayIndexWithStencil(list(loop_numeric_bounds.keys()))
             walker = PatternRewriteWalker(GreedyRewritePatternApplier([replaceArrayIndexWithStencil]), apply_recursively=False)
             walker.rewrite_module(rhs)
 

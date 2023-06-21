@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from xdsl.dialects.builtin import ArrayAttr, IntAttr
 from psy.dialects.psy_ir import NamedType, DerivedType, ArrayType
 from xdsl.ir import MLContext, Dialect
-from xdsl.irdl import irdl_op_definition, SingleBlockRegion, AnyAttr, attr_def, IRDLOperation, AnyOf, region_def
+from xdsl.irdl import irdl_op_definition, SingleBlockRegion, AnyAttr, attr_def, IRDLOperation, AnyOf, region_def, opt_attr_def
 
 @irdl_op_definition
 class PsyStencil_Stencil(IRDLOperation):
@@ -24,6 +24,7 @@ class PsyStencil_Access(IRDLOperation):
 
     var= attr_def(AnyAttr())
     stencil_ops= attr_def(ArrayAttr)
+    op_mapping=opt_attr_def(ArrayAttr)
 
 @irdl_op_definition
 class PsyStencil_DimIndex(IRDLOperation):
