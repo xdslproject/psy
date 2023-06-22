@@ -202,7 +202,7 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
         result_types=[]
         for res in apply_stencil_op.res:
           result_types.append(res.typ)
-        new_stencil=stencil.ApplyOp.get(new_args, block, result_types, apply_stencil_op.lb, apply_stencil_op.ub)
+        new_stencil=stencil.ApplyOp.get(new_args, block, result_types)
         rewriter.replace_matched_op(new_stencil)
 
       self.bridgedFunctions[function_name]=stencil_bridge_fn

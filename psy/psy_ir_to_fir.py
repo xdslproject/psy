@@ -569,7 +569,17 @@ def translate_psy_stencil_access(ctx: SSAValueCtx, stencil_access: Operation, pr
   el_type=try_translate_type(stencil_access.var.type.element_type)
   assert el_type is not None
   offsets=([value.data for value in stencil_access.stencil_ops.data])
-  access_op=stencil.AccessOp.get(ctx[stencil_access.var.var_name.data], offsets)
+  if stencil_access.op_mapping is not None:
+    offset_map=([value.data for value in stencil_access.op_mapping.data])
+    assert len(offset_map) == len(offsets)
+  else:
+    offset_map=None
+
+  # Go into C based indexing, with right most index being the contiguous dimension (most rapidly changing)
+  offsets.reverse()
+  if offset_map is not None: offset_map.reverse()
+
+  access_op=stencil.AccessOp.get(ctx[stencil_access.var.var_name.data], offsets, offset_map)
   return [access_op], access_op.results[0]
 
 def get_array_sizes(array_type):

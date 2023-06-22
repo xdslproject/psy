@@ -261,7 +261,7 @@ class ReplaceAbsoluteArrayIndexWithStencil(RewritePattern):
     if len(index_names) > 0 and index_order is not None:
         index_mapping=[]
         for name in index_names:
-            index_mapping.append(IntAttr(index_order.index(name)))
+            index_mapping.append(IntAttr((len(index_order)-1) - index_order.index(name)))
         attributes["op_mapping"]=ArrayAttr(index_mapping)
 
     access_op=psy_stencil.PsyStencil_Access.build(attributes=attributes)
