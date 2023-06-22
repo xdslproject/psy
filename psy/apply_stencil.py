@@ -204,6 +204,7 @@ class DetermineMinMaxRelativeOffsetsAcrossStencilAccesses(Visitor):
 class CollectArrayRelativeOffsets(Visitor):
   def __init__(self):
     self.offset_val=None
+    self.offset_var=None
 
   def traverse_binary_operation(self, binary_expr: psy_ir.BinaryOperation):
     for op in binary_expr.lhs.blocks[0].ops:
@@ -216,6 +217,9 @@ class CollectArrayRelativeOffsets(Visitor):
 
   def traverse_literal(self, literal:psy_ir.Literal):
     self.offset_val=literal.value.value.data
+
+  def traverse_expr_name(self, id_expr: psy_ir.ExprName):
+    self.offset_var=id_expr.var.var_name.data
 
 class RemoveEmptyLoops(RewritePattern):
   @op_type_rewrite_pattern
@@ -246,11 +250,14 @@ class ReplaceAbsoluteArrayIndexWithStencil(RewritePattern):
     stencil_relative_offsets=[]
     index_names=[]
     for accessor in array_reference.accessors.blocks[0].ops:
-      if index_order is not None:
-          assert accessor.var.var_name.data in index_order
-          index_names.append(accessor.var.var_name.data)
+
       visitor=CollectArrayRelativeOffsets()
       visitor.traverse(accessor)
+
+      if index_order is not None:
+        visitor.offset_var in index_order
+        index_names.append(visitor.offset_var)
+
       if visitor.offset_val is None:
         stencil_relative_offsets.append(IntAttr(0))
       else:
