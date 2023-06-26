@@ -525,7 +525,7 @@ class MergeApplicableStencils(RewritePattern):
         if not MergeApplicableStencils.check_is_equals(target_stencil.max_relative_offset.data, stencil_op.max_relative_offset.data): return
         deferred_array_info_ops=[]
         stencil_result_ops=[]
-        for op in itertools.chain(stencil_op.body.ops, target_stencil.body.ops):
+        for op in itertools.chain(target_stencil.body.ops, stencil_op.body.ops):
           if isinstance(op, psy_stencil.PsyStencil_DeferredArrayInfo):
             deferred_array_info_ops.append(op)
           elif isinstance(op, psy_stencil.PsyStencil_Result):
