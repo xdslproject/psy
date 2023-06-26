@@ -54,6 +54,17 @@ class PsyStencil_Result(IRDLOperation):
 
     traits = frozenset([NoTerminator()])
 
+@irdl_op_definition
+class PsyStencil_IntermediateResult(IRDLOperation):
+    name: str = "psy.stencil.intermediate_result"
+
+    out_field= attr_def(AnyAttr())
+    input_fields= attr_def(ArrayAttr)
+    stencil_ops= attr_def(ArrayAttr)
+    stencil_accesses: SingleBlockRegion = region_def("single_block")
+
+    traits = frozenset([NoTerminator()])
+
 psyStencil = Dialect([
   PsyStencil_Stencil,
   PsyStencil_Access,

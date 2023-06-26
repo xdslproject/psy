@@ -511,6 +511,16 @@ class MergeApplicableStencils(RewritePattern):
           superset.append(field)
       return superset
 
+    def build_output_var_to_result_map(ops):
+        mapping={}
+        for op in ops:
+            assert(type(op) == psy_stencil.PsyStencil_Result)
+            result_out_name=op.out_field.var_name.data
+            if result_out_name not in mapping.keys():
+                mapping[result_out_name]=[]
+            mapping[result_out_name].append(op)
+        return mapping
+
     @op_type_rewrite_pattern
     def match_and_rewrite(
             self, stencil_op: psy_stencil.PsyStencil_Stencil, rewriter: PatternRewriter):
@@ -535,6 +545,17 @@ class MergeApplicableStencils(RewritePattern):
           op.detach()
         input_fields=MergeApplicableStencils.build_superset_tokens(stencil_op.input_fields, target_stencil.input_fields)
         output_fields=MergeApplicableStencils.build_superset_tokens(stencil_op.output_fields, target_stencil.output_fields)
+
+        result_mapping=MergeApplicableStencils.build_output_var_to_result_map(stencil_result_ops)
+        for v in result_mapping.values():
+            assert(len(v) > 0)
+            if len(v) > 1:
+                # Only the last operation here is a result, the rest are intermediate results
+                for result_op in v[:-1]:
+                    op_block=result_op.stencil_accesses.detach_block(0)
+                    intermediate=psy_stencil.PsyStencil_IntermediateResult.build(attributes={"out_field": result_op.out_field,
+                        "input_fields": result_op.input_fields, "stencil_ops": result_op.stencil_ops}, regions=[Region(op_block)])
+                    stencil_result_ops[stencil_result_ops.index(result_op)]=intermediate
 
         new_stencil=psy_stencil.PsyStencil_Stencil.build(attributes={"input_fields": ArrayAttr(input_fields),
               "output_fields": ArrayAttr(output_fields), "from_bounds": target_stencil.from_bounds, "to_bounds": target_stencil.to_bounds,
