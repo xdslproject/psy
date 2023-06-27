@@ -68,6 +68,7 @@ class ProgramState:
     self.global_fn_names=[]
     self.num_gpu_fns=0;
     self.requires_mpi=False
+    self.stencil_intermediate_results={}
 
   def setRequiresMPI(self, requires_mpi):
     self.requires_mpi=requires_mpi
@@ -139,6 +140,15 @@ class ProgramState:
 
   def hasGlobalFnName(self, fn_name):
     return fn_name in self.global_fn_names
+
+  def clearStencilIntermediateResults(self):
+    self.stencil_intermediate_results.clear()
+
+  def addStencilIntermediateResult(self, name, ssa_result):
+    self.stencil_intermediate_results[name]=ssa_result
+
+  def getStencilIntermediateResult(self, name):
+    return self.stencil_intermediate_results[name]
 
 @dataclass
 class LowerPsyIR(ModulePass):
@@ -564,6 +574,11 @@ def translate_stmt(ctx: SSAValueCtx, op: Operation, program_state : ProgramState
     else:
         return ops
 
+def translate_psy_stencil_intermediate_access(ctx: SSAValueCtx, stencil_access: Operation, program_state : ProgramState) -> List[Operation]:
+  ssa_result=program_state.getStencilIntermediateResult(stencil_access.result_uuid.data)
+  assert ssa_result is not None
+  return [], ssa_result
+
 def translate_psy_stencil_access(ctx: SSAValueCtx, stencil_access: Operation, program_state : ProgramState) -> List[Operation]:
   assert isinstance(stencil_access.var.type, psy_ir.ArrayType)
   el_type=try_translate_type(stencil_access.var.type.element_type)
@@ -653,7 +668,9 @@ def translate_psy_stencil_result(ctx: SSAValueCtx, stencil_result: Operation, pr
     #ops+=[return_op]
     return ops, ops[-1].results[0]
 
+  assert False
 
+  # We don't get down here, therefore can remove as was moved to stencil
 
   num_deferred=stencil_result.out_field.type.get_num_deferred_dim()
   # Ensure either no dimensions are deferred or they all are
@@ -814,13 +831,22 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
 
   stencil_contents=[]
   result_ssa_vals=[]
+  program_state.clearStencilIntermediateResults()
   for op in stencil_stmt.body.blocks[0].ops:
     if not isinstance(op, psy_stencil.PsyStencil_DeferredArrayInfo):
       # Ignore the deferred array info statements
-      assert isinstance(op, psy_stencil.PsyStencil_Result)
-      result_ops, ssa_result=translate_psy_stencil_result(c, op, program_state)
-      stencil_contents+=result_ops
-      result_ssa_vals.append(ssa_result)
+      if isinstance(op, psy_stencil.PsyStencil_Result) or isinstance(op, psy_stencil.PsyStencil_IntermediateResult):
+        result_ops, ssa_result=translate_psy_stencil_result(c, op, program_state)
+        stencil_contents+=result_ops
+        if isinstance(op, psy_stencil.PsyStencil_IntermediateResult):
+          program_state.addStencilIntermediateResult(op.uuid.data, ssa_result)
+        else:
+          result_ssa_vals.append(ssa_result)
+      else:
+        # Should never be here, only these three top level contents of a psy_ir stencil operator
+        assert False
+
+  program_state.clearStencilIntermediateResults()
 
   return_op=stencil.ReturnOp.get(result_ssa_vals)
   stencil_contents.append(return_op)
@@ -1638,6 +1664,8 @@ def try_translate_expr(
       return translate_array_reference_expr(ctx, op, program_state)
     if isinstance(op, psy_stencil.PsyStencil_Access):
       return translate_psy_stencil_access(ctx, op, program_state)
+    if isinstance(op, psy_stencil.PsyStencil_IntermediateAccess):
+      return translate_psy_stencil_intermediate_access(ctx, op, program_state)
 
     assert False, "Unknown Expression"
 

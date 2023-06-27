@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 
-from xdsl.dialects.builtin import ArrayAttr, IntAttr
+from xdsl.dialects.builtin import ArrayAttr, IntAttr, StringAttr
 from psy.dialects.psy_ir import NamedType, DerivedType, ArrayType
 from xdsl.traits import NoTerminator, IsTerminator
 from xdsl.ir import MLContext, Dialect
@@ -28,6 +28,14 @@ class PsyStencil_Access(IRDLOperation):
     var= attr_def(AnyAttr())
     stencil_ops= attr_def(ArrayAttr)
     op_mapping=opt_attr_def(ArrayAttr)
+
+@irdl_op_definition
+class PsyStencil_IntermediateAccess(IRDLOperation):
+    name: str = "psy.stencil.intermediate_access"
+
+    var= attr_def(AnyAttr())
+    result_uuid = attr_def(StringAttr)
+
 
 @irdl_op_definition
 class PsyStencil_DimIndex(IRDLOperation):
@@ -61,6 +69,7 @@ class PsyStencil_IntermediateResult(IRDLOperation):
     out_field= attr_def(AnyAttr())
     input_fields= attr_def(ArrayAttr)
     stencil_ops= attr_def(ArrayAttr)
+    uuid = attr_def(StringAttr)
     stencil_accesses: SingleBlockRegion = region_def("single_block")
 
     traits = frozenset([NoTerminator()])

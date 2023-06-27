@@ -11,6 +11,7 @@ from psy.dialects import psy_ir, psy_stencil
 from xdsl.passes import ModulePass
 from util.visitor import Visitor
 from enum import Enum
+import uuid
 
 class AccessMode(Enum):
     WRITE = 1
@@ -554,7 +555,7 @@ class MergeApplicableStencils(RewritePattern):
                 for result_op in v[:-1]:
                     op_block=result_op.stencil_accesses.detach_block(0)
                     intermediate=psy_stencil.PsyStencil_IntermediateResult.build(attributes={"out_field": result_op.out_field,
-                        "input_fields": result_op.input_fields, "stencil_ops": result_op.stencil_ops}, regions=[Region(op_block)])
+                        "input_fields": result_op.input_fields, "stencil_ops": result_op.stencil_ops, "uuid": StringAttr(str(uuid.uuid4()))}, regions=[Region(op_block)])
                     stencil_result_ops[stencil_result_ops.index(result_op)]=intermediate
 
         new_stencil=psy_stencil.PsyStencil_Stencil.build(attributes={"input_fields": ArrayAttr(input_fields),
@@ -563,6 +564,61 @@ class MergeApplicableStencils(RewritePattern):
               regions=[deferred_array_info_ops+stencil_result_ops])
         target_stencil.detach()
         rewriter.replace_matched_op(new_stencil)
+
+class RewriteIntermediateResultAccesses(RewritePattern):
+    def get_result_ops(stencil_op):
+        intermediate_results=[]
+        for op in stencil_op.ops:
+            if isinstance(op, psy_stencil.PsyStencil_IntermediateResult):
+                intermediate_results
+
+    def find_defining_intermediate_result(index, name, stencil_ops):
+      for op in stencil_ops[index-1: : -1]:
+        if isinstance(op, psy_stencil.PsyStencil_IntermediateResult):
+          if op.out_field.var_name.data == name:
+            return op
+      return None
+
+    def process_result(op_index, access_op, stencil_ops):
+      defn_op=RewriteIntermediateResultAccesses.find_defining_intermediate_result(op_index, access_op.var.var_name.data, stencil_ops)
+      if defn_op is not None:
+        # Now check we are accessing all zero elements, otherwise might be working on an element not yet computed!
+        for offset in access_op.stencil_ops:
+          assert offset.data == 0
+        # Now replace this access with a relative access
+        intermediate_access=psy_stencil.PsyStencil_IntermediateAccess.build(attributes={"var": access_op.var, "result_uuid": defn_op.uuid})
+        return intermediate_access
+      else:
+        return None
+
+    def locate_containing_stencil_result(access_op):
+      if access_op is None: return None
+      if isinstance(access_op, psy_stencil.PsyStencil_Result) or isinstance(access_op, psy_stencil.PsyStencil_IntermediateResult):
+        return access_op
+      if isinstance(access_op, psy_stencil.PsyStencil_Stencil): return None
+      return RewriteIntermediateResultAccesses.locate_containing_stencil_result(access_op.parent_op())
+
+
+    @op_type_rewrite_pattern
+    def match_and_rewrite(
+            self, access_op: psy_stencil.PsyStencil_Access, rewriter: PatternRewriter):
+        parent_result=RewriteIntermediateResultAccesses.locate_containing_stencil_result(access_op)
+        assert parent_result is not None
+        stencil_op=parent_result.parent_op()
+        assert stencil_op is not None and isinstance(stencil_op, psy_stencil.PsyStencil_Stencil)
+
+        # We have the parent result, nested in the stencil op - now go through each op in the stencil from
+        # the parent result backwards to identify dependency here
+
+        stencil_ops=[op for op in stencil_op.body.ops]
+
+        index=stencil_ops.index(parent_result)
+
+        replacement=RewriteIntermediateResultAccesses.process_result(index, access_op, stencil_ops)
+        if replacement is not None:
+          rewriter.replace_matched_op(replacement)
+
+
 
 @dataclass
 class ApplyStencilAnalysis(ModulePass):
@@ -578,4 +634,8 @@ class ApplyStencilAnalysis(ModulePass):
 
     walker = PatternRewriteWalker(GreedyRewritePatternApplier([MergeApplicableStencils()]), apply_recursively=False)
     walker.rewrite_module(input_module)
+
+    walker = PatternRewriteWalker(GreedyRewritePatternApplier([RewriteIntermediateResultAccesses()]), apply_recursively=False)
+    walker.rewrite_module(input_module)
+
 
