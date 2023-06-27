@@ -21,19 +21,30 @@ class RewriteFirConvert(RewritePattern):
   def match_and_rewrite(self, op: fir.Convert, rewriter: PatternRewriter, /):
     in_type=op.value.typ
     out_type=op.results[0].typ
+    new_conv=None
     if isinstance(in_type, builtin.Float32Type) and isinstance(out_type,
       builtin.Float64Type) or isinstance(in_type, builtin.Float16Type) and isinstance(out_type,
       builtin.Float64Type) or isinstance(in_type, builtin.Float16Type) and isinstance(out_type,
       builtin.Float32Type) :
       new_conv=arith.ExtFOp.get(op.value, out_type)
-      rewriter.replace_matched_op(new_conv)
 
     if isinstance(in_type, builtin.Float64Type) and isinstance(out_type,
       builtin.Float32Type) or isinstance(in_type, builtin.Float64Type) and isinstance(out_type,
       builtin.Float16Type) or isinstance(in_type, builtin.Float32Type) and isinstance(out_type,
       builtin.Float16Type) :
       new_conv=arith.TruncFOp.get(op.value, out_type)
-      rewriter.replace_matched_op(new_conv)
+
+    if isinstance(in_type, builtin.IndexType) and isinstance(out_type, builtin.IntegerType):
+      new_conv=arith.IndexCastOp.get(op.value, out_type)
+
+    if isinstance(in_type, builtin.IntegerType) and isinstance(out_type, builtin.AnyFloat):
+      new_conv=arith.SIToFPOp.get(op.value, out_type)
+
+    if isinstance(in_type, builtin.AnyFloat) and isinstance(out_type, builtin.IntegerType):
+      new_conv=arith.FPToSIOp.get(op.value, out_type)
+
+    if new_conv is not None: rewriter.replace_matched_op(new_conv)
+
 
 @dataclass
 class RewriteFIRToStandard(ModulePass):
