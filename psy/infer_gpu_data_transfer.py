@@ -11,6 +11,15 @@ from xdsl.dialects import builtin, func, llvm, arith, memref, gpu
 from xdsl.dialects.experimental import fir
 from util.visitor import Visitor
 
+class FindAddressOfForArray(Visitor):
+  def __init__(self, array_name):
+    self.array_name=array_name
+    self.addressof_symbol=None
+
+  def traverse_address_of(self, addressof_op:fir.AddressOf):
+    if addressof_op.symbol.root_reference.data == self.array_name:
+      self.addressof_symbol=addressof_op
+
 class GPU_Stencil_Invocation():
   def __init__(self, name, call_op, arg_names, arg_ssas):
     self.name=name
@@ -26,6 +35,15 @@ class FindFirstStencilBridgedFunction(Visitor):
     fn_name=call_op.callee.root_reference.data
     if "InternalBridgeStencil" in fn_name and self.first_bridged_fn is None:
       self.first_bridged_fn=call_op
+
+class FindLastTimerStopFunction(Visitor):
+  def __init__(self):
+    self.last_timer_stop_fn=None
+
+  def traverse_call(self, call_op:fir.Call):
+    fn_name=call_op.callee.root_reference.data
+    if "timerPtimer_stop" in fn_name:
+      self.last_timer_stop_fn=call_op
 
 class GatherStencilBridgedFunctions(Visitor):
   def __init__(self):
@@ -113,35 +131,181 @@ class DetermineArraySizeAndDims(Visitor):
 
 class GenerateSymbolGPUAllocations():
 
+  class GPUAllocDescriptor:
+    def __init__(self,sizes,basetype):
+        self.sizes = sizes
+        self.basetype = basetype
+
+    def __hash__(self):
+        return hash(str(len(self.sizes))+"-"+' '.join(str(i) for i in self.sizes)+self.basetype.name)
+
+    def __eq__(self, other):
+        if len(self.sizes) != len(other.sizes): return False
+        for s, t in zip(self.sizes, other.sizes):
+          if s != t: return False
+        return self.basetype == other.basetype
+
+    def __ne__(self, other):
+        # Not strictly necessary, but to avoid having both x==y and x!=y
+        # True at the same time
+        return not(self == other)
+
   def generate_GPU_allocation(stencil_bridged_functions, driver_module, stencils_module):
-    alloc_ops=[]
-    return_ops=[]
-    return_types=[]
+
+    function_defs={}
+    call_ops=[]
+    external_call_defs={}
+
+    handled_symbol_types={}
+
     for data_symbol, data_type in stencil_bridged_functions.gpu_data_symbols:
+      if data_symbol.root_reference.data in handled_symbol_types.keys(): continue
+
       array_size_dims_visitor=DetermineArraySizeAndDims(data_symbol, driver_module)
       array_size_dims_visitor.traverse(driver_module)
 
+      handled_symbol_types[data_symbol.root_reference.data]=(data_type, array_size_dims_visitor.sizes)
       memref_type=memref.MemRefType.from_element_type_and_shape(data_type, array_size_dims_visitor.sizes)
-      data_alloc_op=gpu.AllocOp(memref_type)
-      extract_aligned_ptr_op=memref.ExtractAlignedPointerAsIndexOp.get(data_alloc_op)
-      index_cast_op=arith.IndexCastOp.get(extract_aligned_ptr_op, builtin.i64)
-      build_llvm_ptr_op=llvm.IntToPtrOp.get(index_cast_op, data_type)
-      alloc_ops+=[data_alloc_op, extract_aligned_ptr_op, index_cast_op, build_llvm_ptr_op]
-      return_ops.append(build_llvm_ptr_op.results[0])
-      return_types.append(llvm.LLVMPointerType.typed(data_type))
+      allocDescriptor=GenerateSymbolGPUAllocations.GPUAllocDescriptor(array_size_dims_visitor.sizes, data_type)
+      if allocDescriptor not in function_defs:
+        assert allocDescriptor not in external_call_defs
+        data_alloc_op=gpu.AllocOp(memref_type)
+        extract_aligned_ptr_op=memref.ExtractAlignedPointerAsIndexOp.get(data_alloc_op)
+        index_cast_op=arith.IndexCastOp.get(extract_aligned_ptr_op, builtin.i64)
+        build_llvm_ptr_op=llvm.IntToPtrOp.get(index_cast_op, data_type)
 
-    alloc_ops.append(func.Return(*return_ops))
+        block = Block()
+        block.add_ops([data_alloc_op, extract_aligned_ptr_op, index_cast_op, build_llvm_ptr_op, func.Return(build_llvm_ptr_op)])
+        body=Region()
+        body.add_block(block)
 
-    block = Block()
-    block.add_ops(alloc_ops)
+        fn_name="GPU_allocation_"+str(len(function_defs))
+
+        return_types=[llvm.LLVMPointerType.typed(data_type)]
+
+        new_func=func.FuncOp.from_region(fn_name, [], return_types, body)
+        function_defs[allocDescriptor]=new_func
+        external_fn_def=func.FuncOp.external(fn_name, [], return_types)
+        external_call_defs[allocDescriptor]=external_fn_def
+
+
+      target_fn_name=function_defs[allocDescriptor].sym_name.data
+
+      call_op=fir.Call.create(attributes={"callee": builtin.SymbolRefAttr(target_fn_name)}, operands=[], result_types=return_types)
+      call_ops.append(call_op)
+
+    return function_defs.values(), call_ops, external_call_defs.values(), handled_symbol_types
+
+class GenerateDataCopyBack():
+  def construct_memref_creation(dim_sizes, base_type, llvm_pointer):
+    construction_ops=[]
+
+    number_dims=len(dim_sizes)
+    ptr_type=llvm.LLVMPointerType.typed(base_type)
+
+    array_typ=llvm.LLVMArrayType.from_size_and_type(builtin.IntAttr(number_dims), builtin.i64)
+    struct_type=llvm.LLVMStructType.from_type_list([ptr_type, ptr_type, builtin.i64, array_typ, array_typ])
+
+    undef_memref_struct=llvm.LLVMMLIRUndef.create(result_types=[struct_type])
+    insert_alloc_ptr_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i64, [0])},
+      operands=[undef_memref_struct.results[0], llvm_pointer], result_types=[struct_type])
+    insert_aligned_ptr_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i64, [1])},
+      operands=[insert_alloc_ptr_op.results[0], llvm_pointer], result_types=[struct_type])
+
+    offset_op=arith.Constant.from_int_and_width(0, 64)
+    insert_offset_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i64, [2])},
+      operands=[insert_aligned_ptr_op.results[0], offset_op.results[0]], result_types=[struct_type])
+
+    construction_ops=[undef_memref_struct, insert_alloc_ptr_op, insert_aligned_ptr_op, offset_op, insert_offset_op]
+
+    for dim, dim_size in enumerate(dim_sizes):
+      size_op=arith.Constant.from_int_and_width(dim_size, 64)
+      insert_size_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i64, [3, dim])},
+        operands=[construction_ops[-1].results[0], size_op.results[0]], result_types=[struct_type])
+
+      # One for dimension stride
+      stride_op=arith.Constant.from_int_and_width(1, 64)
+      insert_stride_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i64, [4, dim])},
+        operands=[insert_size_op.results[0], stride_op.results[0]], result_types=[struct_type])
+
+      construction_ops+=[size_op, insert_size_op, stride_op, insert_stride_op]
+
+    target_memref_type=memref.MemRefType.from_element_type_and_shape(ptr_type.type, dim_sizes)
+
+    unrealised_conv_cast_op=builtin.UnrealizedConversionCastOp.create(operands=[insert_stride_op.results[0]], result_types=[target_memref_type])
+    construction_ops.append(unrealised_conv_cast_op)
+
+    return construction_ops, unrealised_conv_cast_op.results[0]
+
+  def construct_FIR_array_ptr_extract(array_full_data_type, address_of_ssa, base_type):
+    ptr_type=fir.LLVMPointerType([base_type])
+    result_ptr_type=llvm.LLVMPointerType.typed(base_type)
+    box_type=GatherStencilBridgedFunctions.get_nested_type(array_full_data_type, fir.BoxType)
+    heap_type=GatherStencilBridgedFunctions.get_nested_type(array_full_data_type, fir.HeapType)
+
+    load_op=fir.Load.create(operands=[address_of_ssa], result_types=[box_type])
+    box_addr_op=fir.BoxAddr.create(operands=[load_op.results[0]], result_types=[heap_type])
+    convert_op=fir.Convert.create(operands=[box_addr_op.results[0]], result_types=[ptr_type])
+
+    return [load_op, box_addr_op, convert_op], convert_op.results[0]
+
+  def generate_copy_back(named_gpu_pointers, handled_symbol_types, driver_module, field_wildcards=None):
+    argument_types=[]
+    external_argument_types=[]
+
+    data_ssas=[]
+    call_data_convert_ops=[]
+
+    if field_wildcards is None:
+      gpu_pointer_names=named_gpu_pointers.keys()
+    else:
+      gpu_pointer_names=[]
+      for e in named_gpu_pointers.keys():
+        for w in field_wildcards:
+          if w in e:
+            gpu_pointer_names.append(e)
+            break
+
+    for symbol_name in gpu_pointer_names:
+      # Two arg types per key, both llvm pointer
+      arg_type=llvm.LLVMPointerType.typed(handled_symbol_types[symbol_name][0])
+      fir_arg_type=fir.LLVMPointerType([handled_symbol_types[symbol_name][0]])
+      argument_types+=[arg_type, arg_type]
+      external_argument_types+=[fir_arg_type, arg_type]
+      v=FindAddressOfForArray(symbol_name)
+      v.traverse(driver_module)
+      assert v.addressof_symbol is not None
+      ops, ssa=GenerateDataCopyBack.construct_FIR_array_ptr_extract(v.addressof_symbol.results[0].typ, v.addressof_symbol.results[0], handled_symbol_types[symbol_name][0])
+      data_ssas.append(ssa)
+      data_ssas.append(named_gpu_pointers[symbol_name])
+      call_data_convert_ops+=ops
+
+    call_op=fir.Call.create(attributes={"callee": builtin.SymbolRefAttr("GPU_copyback")}, operands=data_ssas, result_types=[])
+    call_data_convert_ops.append(call_op)
+
+    block = Block(arg_types=argument_types)
+
+    fn_ops=[]
+
+    for idx, symbol_name in enumerate(gpu_pointer_names):
+      base_arg=idx*2
+      memref_host_data_ops, memref_host_data_ssa=GenerateDataCopyBack.construct_memref_creation(handled_symbol_types[symbol_name][1], handled_symbol_types[symbol_name][0], block.args[base_arg])
+      memref_gpu_data_ops, memref_gpu_data_ssa=GenerateDataCopyBack.construct_memref_creation(handled_symbol_types[symbol_name][1], handled_symbol_types[symbol_name][0], block.args[base_arg+1])
+      gpu_copy_back=gpu.MemcpyOp(memref_gpu_data_ssa, memref_host_data_ssa)
+      fn_ops.extend(memref_host_data_ops)
+      fn_ops.extend(memref_gpu_data_ops)
+      fn_ops.append(gpu_copy_back)
+
+    block.add_ops(fn_ops)
+    block.add_op(func.Return())
     body=Region()
     body.add_block(block)
 
-    alloc_func=func.FuncOp.from_region("GPU_allocation", [], return_types, body)
-    call_op=fir.Call.create(attributes={"callee": builtin.SymbolRefAttr("GPU_allocation")}, operands=[], result_types=return_types)
-    external_alloc_func_def=func.FuncOp.external("GPU_allocation", [], return_types)
+    copy_back_fn=func.FuncOp.from_region("GPU_copyback", argument_types, [], body)
+    external_fn_def=func.FuncOp.external("GPU_copyback", external_argument_types, [])
 
-    return alloc_func, call_op, external_alloc_func_def
+    return copy_back_fn, call_data_convert_ops, external_fn_def
+
 
 @dataclass
 class InferGPUDataTransfer(ModulePass):
@@ -167,11 +331,17 @@ class InferGPUDataTransfer(ModulePass):
     driver_module=list(module.ops)[1]
     stencil_bridged_functions=GatherStencilBridgedFunctions()
     stencil_bridged_functions.traverse(driver_module)
-    alloc_func, call_op, external_alloc_func_def=GenerateSymbolGPUAllocations.generate_GPU_allocation(stencil_bridged_functions, driver_module, stencils_module)
+    alloc_funcs, call_ops, external_alloc_func_defs, handled_symbol_types=GenerateSymbolGPUAllocations.generate_GPU_allocation(stencil_bridged_functions, driver_module, stencils_module)
+
+    named_gpu_llvm_ptr={}
+    for index, (data_symbol, data_type) in enumerate(stencil_bridged_functions.gpu_data_symbols):
+      if data_symbol.root_reference.data not in named_gpu_llvm_ptr.keys():
+        named_gpu_llvm_ptr[data_symbol.root_reference.data]=call_ops[index].results[0]
+
     for stencil_invoke in stencil_bridged_functions.stencil_invokes:
       for idx, arg_name in enumerate(stencil_invoke.arg_names):
         ssa_index=InferGPUDataTransfer.find_array_index(arg_name, stencil_bridged_functions)
-        stencil_invoke.arg_ssas[idx]=call_op.results[ssa_index]
+        stencil_invoke.arg_ssas[idx]=call_ops[ssa_index].results[0]
 
       new_call_op=fir.Call.create(attributes={"callee": builtin.SymbolRefAttr(stencil_invoke.name)}, operands=stencil_invoke.arg_ssas, result_types=[])
       stencil_invoke.call_op.parent.insert_op_after(new_call_op, stencil_invoke.call_op)
@@ -180,11 +350,22 @@ class InferGPUDataTransfer(ModulePass):
       for op in stencil_invoke.call_op.args:
         InferGPUDataTransfer.erase_unused_data_ops(op.owner)
 
-    stencils_module.regions[0].block.add_op(alloc_func)
-    driver_module.regions[0].block.add_op(external_alloc_func_def)
+    stencils_module.regions[0].block.add_ops(alloc_funcs)
+    driver_module.regions[0].block.add_ops(external_alloc_func_defs)
 
     v=FindFirstStencilBridgedFunction()
     v.traverse(driver_module)
     assert v.first_bridged_fn is not None
-    v.first_bridged_fn.parent.insert_op_before(call_op, v.first_bridged_fn)
+    v.first_bridged_fn.parent.insert_ops_before(call_ops, v.first_bridged_fn)
 
+'''
+    copy_back_fn, call_ops, external_def=GenerateDataCopyBack.generate_copy_back(named_gpu_llvm_ptr, handled_symbol_types, driver_module, ["su", "sw", "sv"])
+
+    stencils_module.regions[0].block.add_op(copy_back_fn)
+    driver_module.regions[0].block.add_op(external_def)
+
+    v=FindLastTimerStopFunction()
+    v.traverse(driver_module)
+    assert v.last_timer_stop_fn is not None
+    v.last_timer_stop_fn.parent.insert_ops_before(call_ops, v.last_timer_stop_fn)
+'''
