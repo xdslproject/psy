@@ -11,6 +11,7 @@ from psy.psy_ir_to_fir import LowerPsyIR
 from psy.apply_stencil import ApplyStencilAnalysis
 from psy.extract_stencil import ExtractStencil
 from psy.rewrite_fir_to_standard import RewriteFIRToStandard
+from psy.infer_gpu_data_transfer import InferGPUDataTransfer
 
 from psy.dialects.psy_ir import psyIR
 from psy.dialects.psy_stencil import psyStencil
@@ -30,6 +31,7 @@ class PsyOptMain(xDSLOptMain):
         self.register_pass(LowerPsyIR)
         self.register_pass(ExtractStencil)
         self.register_pass(RewriteFIRToStandard)
+        self.register_pass(InferGPUDataTransfer)
 
     def register_all_targets(self):
         super().register_all_targets()
