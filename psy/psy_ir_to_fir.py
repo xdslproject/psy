@@ -855,7 +855,7 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
 
   field_bounds=[]
   for dim in array_sizes:
-    field_bounds.append((1, dim-1))
+    field_bounds.append((0, dim-2))
 
   stencil_temptypes=[]
   for result_ssa_val in result_ssa_vals:
@@ -867,7 +867,7 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
   for index, out_tuple in enumerate(output_field_cast_ops):
     out_var_name=stencil_stmt.output_fields.data[index].var_name.data
     lb_indexes=stencil.IndexAttr.get(*([0] * len(array_sizes)))
-    ub_indexes=stencil.IndexAttr.get(*array_sizes)
+    ub_indexes=stencil.IndexAttr.get(*(el-2 for el in array_sizes))
     store_op=stencil.StoreOp.get(apply_op.results[index], out_tuple[0].results[0], lb_indexes, ub_indexes)
     external_store_op=stencil.ExternalStoreOp.create(operands=[out_tuple[1].results[0], ctx[out_var_name]])
     ops+=[store_op, external_store_op]
