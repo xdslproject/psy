@@ -92,22 +92,35 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
 
     def bridge_fir_deferred_array(self, external_load_op, ptr_type):
       # This is deferred type, but just check the type is what we expect
-      # Should be !fir.ref<!fir.box<!fir.heap<!fir.array<?x?x?x!f64>>>>
+      # Should be !fir.ref<!fir.box<!fir.heap<!fir.array<?x?x?x!f64>>>> or
+      # !fir.ref<<!fir.heap<!fir.array<?x?x?x!f64>>> (later is for Fortran and not PSyclone)
       # With any number of array dimensions
       # In this case need to load and debox it, that gives us a heap
       # we can then convert to an llvm pointer
       data_type=external_load_op.field.owner.inputs[0].typ
       assert isinstance(data_type, fir.ReferenceType)
-      assert ExtractStencilOps.has_nested_type(data_type, fir.BoxType)
       assert ExtractStencilOps.has_nested_type(data_type, fir.HeapType)
 
-      box_type=self.get_nested_type(data_type, fir.BoxType)
       heap_type=self.get_nested_type(data_type, fir.HeapType)
+      load_res_type=heap_type
 
-      load_op=fir.Load.create(operands=[external_load_op.field.owner.inputs[0]], result_types=[box_type])
-      box_addr_op=fir.BoxAddr.create(operands=[load_op.results[0]], result_types=[heap_type])
-      convert_op=fir.Convert.create(operands=[box_addr_op.results[0]], result_types=[ptr_type])
-      return [load_op, box_addr_op, convert_op], convert_op
+      has_box_type=ExtractStencilOps.has_nested_type(data_type, fir.BoxType)
+      if has_box_type:
+        box_type=self.get_nested_type(data_type, fir.BoxType)
+        load_res_type=box_type
+
+      load_op=fir.Load.create(operands=[external_load_op.field.owner.inputs[0]], result_types=[load_res_type])
+      conv_op_input=load_op
+      if has_box_type:
+        box_addr_op=fir.BoxAddr.create(operands=[load_op.results[0]], result_types=[heap_type])
+        conv_op_input=box_addr_op
+      convert_op=fir.Convert.create(operands=[conv_op_input.results[0]], result_types=[ptr_type])
+
+      if has_box_type:
+        ops=[load_op, box_addr_op, convert_op]
+      else:
+        ops=[load_op, convert_op]
+      return ops, convert_op
 
     def getFuncOpContainer(op):
       if op is None: return None
