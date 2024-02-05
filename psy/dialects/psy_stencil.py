@@ -74,7 +74,7 @@ class PsyStencil_IntermediateResult(IRDLOperation):
 
     traits = frozenset([NoTerminator()])
 
-psyStencil = Dialect([
+psyStencil = Dialect('stencil', [
   PsyStencil_Stencil,
   PsyStencil_Access,
   PsyStencil_DeferredArrayInfo,

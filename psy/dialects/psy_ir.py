@@ -13,7 +13,7 @@ from xdsl.printer import Printer
 
 @irdl_attr_definition
 class BoolAttr(Data[bool]):
-    name = "bool"
+    name = "psy.ir.bool"
     data: bool
 
     @staticmethod
@@ -33,7 +33,7 @@ class BoolAttr(Data[bool]):
 
 @irdl_attr_definition
 class DerivedType(ParametrizedAttribute):
-    name = "derivedtype"
+    name = "psy.ir.derivedtype"
 
     type : ParameterDef[StringAttr]
 
@@ -47,7 +47,7 @@ class DerivedType(ParametrizedAttribute):
 
 @irdl_attr_definition
 class EmptyAttr(ParametrizedAttribute):
-    name="empty"
+    name="psy.ir.empty"
 
 @irdl_attr_definition
 class NamedType(ParametrizedAttribute):
@@ -76,20 +76,20 @@ class EmptyToken(EmptyAttr):
 
 @irdl_attr_definition
 class AnonymousAttr(ParametrizedAttribute):
-    name = "anonymous"
+    name = "psy.ir.anonymous"
 
 @irdl_attr_definition
 class DeferredAttr(ParametrizedAttribute):
-    name = "deferred"
+    name = "psy.ir.deferred"
 
 @irdl_attr_definition
 class AssumedSizeAttr(ParametrizedAttribute):
-    name = "assumed_size"
+    name = "psy.ir.assumed_size"
 
 # Ideally would use vector, but need unknown dimension types (and ranges too!)
 @irdl_attr_definition
 class ArrayType(ParametrizedAttribute):
-    name = "arraytype"
+    name = "psy.ir.arraytype"
 
     shape : ParameterDef[ArrayAttr]
     element_type : ParameterDef[AnyOf([NamedType, DerivedType])]
@@ -595,7 +595,7 @@ class CallExpr(IRDLOperation):
     def verify_(self) -> None:
       pass
 
-psyIR = Dialect([
+psyIR = Dialect('psy', [
     FileContainer,
     Container,
     Routine,
