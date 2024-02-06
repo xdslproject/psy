@@ -15,7 +15,7 @@ from typing import List, Optional, Tuple, Dict
 import copy
 
 binary_arith_op_matching={"ADD": [arith.Addi, arith.Addf], "SUB":[arith.Subi, arith.Subf], "MUL": [arith.Muli, arith.Mulf], "DIV": [arith.DivSI, arith.Divf], "REM": [arith.RemSI, None],
-"MIN" : [arith.MinSI, arith.Minf], "MAX" : [arith.MaxSI, arith.Maxf], "POW" : [math.IPowIOp, None, None], "SIGN": [None, math.CopySignOp]}
+"MIN" : [arith.MinSI, arith.Minimumf], "MAX" : [arith.MaxSI, arith.Maximumf], "POW" : [math.IPowIOp, None, None], "SIGN": [None, math.CopySignOp]}
 
 binary_arith_psy_to_arith_comparison_op={"EQ": "eq", "NE": "ne", "GT": "sgt", "LT": "slt", "GE": "sge", "LE": "sle"}
 
@@ -420,7 +420,7 @@ def define_derived_var(ctx: SSAValueCtx,
     type_name=var_def.var.type.type.data
     if type_name == "mpi_request":
       constant=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(1, 32)}, result_types=[i32])
-      mpi_request_alloc=mpi.AllocateTypeOp.get(mpi.RequestType, constant.results[0], var_name)
+      mpi_request_alloc=mpi.AllocateTypeOp(mpi.RequestType, constant.results[0], var_name)
       ctx[var_name.data] = mpi_request_alloc.results[0]
       return [constant, mpi_request_alloc]
     else:
@@ -658,7 +658,7 @@ def translate_psy_stencil_result(ctx: SSAValueCtx, stencil_result: Operation, pr
   assert el_type is not None
   rt=stencil.ResultType(el_type)
 
-  if el_type != ops[-1].results[0].typ:
+  if el_type != ops[-1].results[0].type:
     data_conv_op=perform_data_conversion_if_needed(ops[-1].results[0], el_type)
     #return_op=stencil.ReturnOp.get([data_conv_op.results[0]])
     ops+=[data_conv_op]
@@ -741,7 +741,7 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
 
       if num_deferred > 0:
         # Use an unrealized conversion to pop in the array size information here
-        in_type=ctx[field.var_name.data].typ
+        in_type=ctx[field.var_name.data].type
         explicit_size_type=rebuild_deferred_fir_array_with_bounds(in_type, fortran_array_sizes)
         unreconciled_conv_op=UnrealizedConversionCastOp.create(operands=[ctx[field.var_name.data]], result_types=[explicit_size_type])
         external_load_op=stencil.ExternalLoadOp.get(unreconciled_conv_op.results[0], stencil.FieldType(field_bounds, el_type))
@@ -749,7 +749,7 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
       else:
         external_load_op=stencil.ExternalLoadOp.get(ctx[field.var_name.data], stencil.FieldType(field_bounds, el_type))
         ops+=[external_load_op]
-      cast_op=stencil.CastOp.get(external_load_op.results[0], stencil.StencilBoundsAttr(field_bounds), external_load_op.results[0].typ)
+      cast_op=stencil.CastOp.get(external_load_op.results[0], stencil.StencilBoundsAttr(field_bounds), external_load_op.results[0].type)
       input_cast_ops[field.var_name.data]=cast_op
       load_op=stencil.LoadOp.get(cast_op.results[0], lb, ub)
       ops+=[cast_op, load_op]
@@ -758,8 +758,8 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
       # This is a scalar and simply set outside the stencil loop and used in here
       # therefore include the context of this but don't need to do anything else
       scalar_var=ctx[field.var_name.data]
-      if isinstance(scalar_var.typ, fir.ReferenceType):
-        load_op=fir.Load.create(operands=[scalar_var], result_types=[scalar_var.typ.type])
+      if isinstance(scalar_var.type, fir.ReferenceType):
+        load_op=fir.Load.create(operands=[scalar_var], result_types=[scalar_var.type.type])
         ops+=[load_op]
         new_ctx[field.var_name.data]=load_op.results[0]
       else:
@@ -791,7 +791,7 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
 
     if num_deferred > 0:
       # Use an unrealized conversion to pop in the array size information here
-      in_type=ctx[field.var_name.data].typ
+      in_type=ctx[field.var_name.data].type
       explicit_size_type=rebuild_deferred_fir_array_with_bounds(in_type, fortran_array_sizes)
       unreconciled_conv_op=UnrealizedConversionCastOp.create(operands=[ctx[field.var_name.data]], result_types=[explicit_size_type])
       external_load_op=stencil.ExternalLoadOp.get(unreconciled_conv_op.results[0], stencil.FieldType(field_bounds, el_type))
@@ -799,7 +799,7 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
     else:
       external_load_op=stencil.ExternalLoadOp.get(ctx[field.var_name.data], stencil.FieldType(field_bounds, el_type))
       ops+=[external_load_op]
-    output_field_cast_op=stencil.CastOp.get(external_load_op.results[0], stencil.StencilBoundsAttr(field_bounds), external_load_op.results[0].typ)
+    output_field_cast_op=stencil.CastOp.get(external_load_op.results[0], stencil.StencilBoundsAttr(field_bounds), external_load_op.results[0].type)
     output_field_cast_ops.append((output_field_cast_op, external_load_op))
     ops+=[output_field_cast_op]
     #new_ctx[field.var_name.data]=output_field_cast_op.results[0]
@@ -807,7 +807,7 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
   block_fields={}
   for var in stencil_stmt.input_fields.data:
     # Use the new ctx as this will point to the temporary
-    block_fields[var.var_name.data]=new_ctx[var.var_name.data].typ
+    block_fields[var.var_name.data]=new_ctx[var.var_name.data].type
 
   block_types=[]
   block_idx={}
@@ -859,7 +859,7 @@ def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, pro
 
   stencil_temptypes=[]
   for result_ssa_val in result_ssa_vals:
-    stencil_temptypes.append(stencil.TempType(field_bounds, result_ssa_val.typ))
+    stencil_temptypes.append(stencil.TempType(field_bounds, result_ssa_val.type))
   apply_op=stencil.ApplyOp.get(block_ops, block, stencil_temptypes)
 
   ops.append(apply_op)
@@ -898,7 +898,7 @@ def translate_gpu_loop(ctx: SSAValueCtx, gpu_stmt: Operation, program_state : Pr
   return [launch_fn]
 
 def translate_return(ctx: SSAValueCtx, return_stmt: psy_ir.Return, program_state : ProgramState) -> List[Operation]:
-  return [cf.Branch.get(program_state.getReturnBlock())]
+  return [cf.Branch(program_state.getReturnBlock())]
 
 def translate_loop(ctx: SSAValueCtx,
                   for_stmt: psy_ir.Loop, program_state : ProgramState) -> List[Operation]:
@@ -986,9 +986,9 @@ def translate_assign(ctx: SSAValueCtx,
     else:
       translated_target = ctx[assign.lhs.op.id.data]
 
-    target_conversion_type=get_store_conversion_if_needed(translated_target.typ, value_var.typ)
+    target_conversion_type=get_store_conversion_if_needed(translated_target.type, value_var.type)
     if target_conversion_type is not None:
-      if isinstance(value_var.typ, fir.ReferenceType):
+      if isinstance(value_var.type, fir.ReferenceType):
         # This is a reference, therefore load it
         converter=fir.Load.create(operands=[value_var], result_types=[target_conversion_type])
       else:
@@ -1063,12 +1063,12 @@ def translate_mpi_bcast_intrinsic_call_expr(ctx: SSAValueCtx,
     convert_buffer=fir.Convert.create(operands=[buffer_arg],
                     result_types=[fir.LLVMPointerType([ptr_type])])
     count_op, count_arg = translate_expr(ctx, ops_list, program_state)
-    get_mpi_dtype_op=mpi.GetDtypeOp.get(ptr_type)
+    get_mpi_dtype_op=mpi.GetDtypeOp(ptr_type)
     root_op, root_arg = translate_expr(ctx, ops_list, program_state)
 
     result_ops=count_op + root_op + [convert_buffer, get_mpi_dtype_op]
 
-    bcast_op=mpi.Bcast.get(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], root_arg)
+    bcast_op=mpi.Bcast(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], root_arg)
     result_ops.append(bcast_op)
 
     return result_ops
@@ -1090,14 +1090,14 @@ def translate_mpi_reduce_intrinsic_call_expr(ctx: SSAValueCtx,
     recv_convert_buffer=fir.Convert.create(operands=[recv_buffer_arg],
                     result_types=[fir.LLVMPointerType([recv_ptr_type])])
     count_op, count_arg = translate_expr(ctx, ops_list[2], program_state)
-    get_mpi_dtype_op=mpi.GetDtypeOp.get(send_ptr_type) # Do this on the send buffer type
+    get_mpi_dtype_op=mpi.GetDtypeOp(send_ptr_type) # Do this on the send buffer type
 
     mpi_op=str_to_mpi_operation[ops_list[3].value.data]
     root_op, root_arg = translate_expr(ctx, ops_list[4], program_state)
 
     result_ops=count_op + root_op + [send_convert_buffer, recv_convert_buffer, get_mpi_dtype_op]
 
-    mpi_reduce_op=mpi.Reduce.get(send_convert_buffer.results[0], recv_convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], mpi_op, root_arg)
+    mpi_reduce_op=mpi.Reduce(send_convert_buffer.results[0], recv_convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], mpi_op, root_arg)
     result_ops.append(mpi_reduce_op)
 
     return result_ops
@@ -1132,16 +1132,16 @@ def translate_mpi_allreduce_intrinsic_call_expr(ctx: SSAValueCtx,
     recv_convert_buffer=fir.Convert.create(operands=[recv_buffer_arg],
                     result_types=[fir.LLVMPointerType([recv_ptr_type])])
     count_op, count_arg = translate_expr(ctx, ops_list[count_idx], program_state)
-    get_mpi_dtype_op=mpi.GetDtypeOp.get(recv_ptr_type) # Do this on the recv buffer type
+    get_mpi_dtype_op=mpi.GetDtypeOp(recv_ptr_type) # Do this on the recv buffer type
 
     mpi_op=str_to_mpi_operation[ops_list[mpi_op_idx].value.data]
 
     if has_send_buffer:
       result_ops=count_op + [send_convert_buffer, recv_convert_buffer, get_mpi_dtype_op]
-      mpi_reduce_op=mpi.Allreduce.get(send_convert_buffer.results[0], recv_convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], mpi_op)
+      mpi_reduce_op=mpi.Allreduce(send_convert_buffer.results[0], recv_convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], mpi_op)
     else:
       result_ops=count_op + [recv_convert_buffer, get_mpi_dtype_op]
-      mpi_reduce_op=mpi.Allreduce.get(None, recv_convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], mpi_op)
+      mpi_reduce_op=mpi.Allreduce(None, recv_convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], mpi_op)
 
     result_ops.append(mpi_reduce_op)
 
@@ -1154,7 +1154,7 @@ def translate_mpi_buffer(ctx: SSAValueCtx, ops: psy_ir.ExprName, program_state :
     if isinstance(ptr_type, fir.SequenceType): ptr_type=ptr_type.type
 
     buffer_op, buffer_arg = translate_expr(ctx, ops, program_state)
-    if not isinstance(buffer_arg.typ, fir.ReferenceType):
+    if not isinstance(buffer_arg.type, fir.ReferenceType):
       if isinstance(buffer_op, list) and len(buffer_op) == 1 and isinstance(buffer_op[0], fir.Load):
         # We do this as translate expression assumes we want to use the value rather than the reference,
         # so it loads the value from the fir.referencetype, hence we go in and grab the reference type.
@@ -1174,14 +1174,14 @@ def translate_mpi_wait_intrinsic_call_expr(ctx: SSAValueCtx,
     request_op, request_arg = translate_expr(ctx, call_expr.args.blocks[0].ops.first, program_state)
     if request_op is not None: to_return+=request_op
 
-    if isinstance(request_arg.typ, mpi.VectorType):
+    if isinstance(request_arg.type, mpi.VectorType):
       element_index=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(0, 32)},
                                          result_types=[i32])
-      load_op=mpi.VectorGetOp.get(request_arg, element_index.results[0])
-      wait_op=mpi.Wait.get(load_op.results[0])
+      load_op=mpi.VectorGetOp(request_arg, element_index.results[0])
+      wait_op=mpi.Wait(load_op.results[0])
       to_return+=[element_index, load_op, wait_op]
     else:
-      wait_op=mpi.Wait.get(request_arg)
+      wait_op=mpi.Wait(request_arg)
       to_return.append(wait_op)
 
     return to_return
@@ -1201,7 +1201,7 @@ def translate_mpi_waitall_intrinsic_call_expr(ctx: SSAValueCtx,
 
     request_ops, request_args = translate_expr(ctx, ops_list[0], program_state)
     count_op, count_arg = translate_expr(ctx, ops_list[1], program_state)
-    wait_op=mpi.Waitall.get(request_args, count_arg)
+    wait_op=mpi.Waitall(request_args, count_arg)
     return count_op + [wait_op]
 
 
@@ -1224,25 +1224,25 @@ def translate_mpi_send_intrinsic_call_expr(ctx: SSAValueCtx,
     count_op, count_arg = translate_expr(ctx, ops_list[1], program_state)
     target_op, target_arg = translate_expr(ctx, ops_list[2], program_state)
     tag_op, tag_arg = translate_expr(ctx, ops_list[3], program_state)
-    get_mpi_dtype_op=mpi.GetDtypeOp.get(ptr_type)
+    get_mpi_dtype_op=mpi.GetDtypeOp(ptr_type)
 
     result_ops=count_op + target_op + tag_op + [convert_buffer, get_mpi_dtype_op]
 
     if blocking:
-      mpi_send_op=mpi.Send.get(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], target_arg, tag_arg)
+      mpi_send_op=mpi.Send(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], target_arg, tag_arg)
       result_ops.append(mpi_send_op)
     else:
       request_op, request_arg = translate_expr(ctx, ops_list[4], program_state)
       if request_op is not None: result_ops+=request_op
 
-      if isinstance(request_arg.typ, mpi.VectorType):
+      if isinstance(request_arg.type, mpi.VectorType):
         element_index=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(0, 32)},
                                          result_types=[i32])
-        load_op=mpi.VectorGetOp.get(request_arg, element_index.results[0])
-        mpi_send_op=mpi.Isend.get(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], target_arg, tag_arg, load_op.results[0])
+        load_op=mpi.VectorGetOp(request_arg, element_index.results[0])
+        mpi_send_op=mpi.Isend(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], target_arg, tag_arg, load_op.results[0])
         result_ops+=[element_index, load_op, mpi_send_op]
       else:
-        mpi_send_op=mpi.Isend.get(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], target_arg, tag_arg, request_arg)
+        mpi_send_op=mpi.Isend(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], target_arg, tag_arg, request_arg)
         result_ops.append(mpi_send_op)
 
     return result_ops
@@ -1266,25 +1266,25 @@ def translate_mpi_recv_intrinsic_call_expr(ctx: SSAValueCtx,
     count_op, count_arg = translate_expr(ctx, ops_list[1], program_state)
     source_op, source_arg = translate_expr(ctx, ops_list[2], program_state)
     tag_op, tag_arg = translate_expr(ctx, ops_list[3], program_state)
-    get_mpi_dtype_op=mpi.GetDtypeOp.get(ptr_type)
+    get_mpi_dtype_op=mpi.GetDtypeOp(ptr_type)
 
     result_ops=count_op + source_op + tag_op + [convert_buffer, get_mpi_dtype_op]
 
     if blocking:
-      mpi_recv_op=mpi.Recv.get(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], source_arg, tag_arg)
+      mpi_recv_op=mpi.Recv(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], source_arg, tag_arg)
       result_ops.append(mpi_recv_op)
     else:
       request_op, request_arg = translate_expr(ctx, ops_list[4], program_state)
       if request_op is not None: result_ops+=request_op
 
-      if isinstance(request_arg.typ, mpi.VectorType):
+      if isinstance(request_arg.type, mpi.VectorType):
         element_index=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(0, 32)},
                                          result_types=[i32])
-        load_op=mpi.VectorGetOp.get(request_arg, element_index.results[0])
-        mpi_recv_op=mpi.Irecv.get(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], source_arg, tag_arg, load_op.results[0])
+        load_op=mpi.VectorGetOp(request_arg, element_index.results[0])
+        mpi_recv_op=mpi.Irecv(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], source_arg, tag_arg, load_op.results[0])
         result_ops+=[element_index, load_op, mpi_recv_op]
       else:
-        mpi_recv_op=mpi.Irecv.get(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], source_arg, tag_arg, request_arg)
+        mpi_recv_op=mpi.Irecv(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], source_arg, tag_arg, request_arg)
         result_ops.append(mpi_recv_op)
 
     return result_ops
@@ -1297,13 +1297,13 @@ def type_to_mpi_datatype(typ):
 def translate_mpi_commrank_intrinsic_call_expr(ctx: SSAValueCtx,
                              call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
     program_state.setRequiresMPI(True)
-    mpi_call=mpi.CommRank.get()
+    mpi_call=mpi.CommRank()
     return [mpi_call]
 
 def translate_mpi_commsize_intrinsic_call_expr(ctx: SSAValueCtx,
                              call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
     program_state.setRequiresMPI(True)
-    mpi_call=mpi.CommSize.get()
+    mpi_call=mpi.CommSize()
     return [mpi_call]
 
 def translate_timer_report_intrinsic_call_expr(ctx: SSAValueCtx,
@@ -1332,13 +1332,13 @@ def translate_timer_start_intrinsic_call_expr(ctx: SSAValueCtx,
     op_desc, arg_desc = translate_expr(ctx, ops_list[1], program_state)
 
     assert isinstance(arg_ctrl.owner, fir.Load)
-    assert arg_ctrl.owner.memref.typ == fir.ReferenceType([i32])
+    assert arg_ctrl.owner.memref.type == fir.ReferenceType([i32])
 
     deferred_char_type=fir.ReferenceType([fir.CharacterType([fir.IntAttr(1), fir.DeferredAttr()])])
     convert_op=fir.Convert.create(operands=[arg_desc], result_types=[deferred_char_type])
 
 
-    embox_to_found=arith.Constant.create(attributes={"value": IntegerAttr.from_index_int_value(arg_desc.typ.type.to_index.data)}, result_types=[IndexType()])
+    embox_to_found=arith.Constant.create(attributes={"value": IntegerAttr.from_index_int_value(arg_desc.type.type.to_index.data)}, result_types=[IndexType()])
 
     embox_op=emboxchar_op=fir.Emboxchar.create(operands=[convert_op.results[0], embox_to_found.results[0]], result_types=[fir.BoxCharType([fir.IntAttr(1)])])
 
@@ -1347,8 +1347,8 @@ def translate_timer_start_intrinsic_call_expr(ctx: SSAValueCtx,
     start_call=fir.Call.create(attributes={"callee": SymbolRefAttr("_QMdl_timerPtimer_start")},
       operands=[arg_ctrl.owner.memref, embox_op.results[0], absent_op.results[0]], result_types=[])
 
-    insertExternalFunctionToGlobalState(program_state, "_QMdl_timerPtimer_start", [start_call.operands[0].typ,
-      start_call.operands[1].typ, start_call.operands[2].typ], None)
+    insertExternalFunctionToGlobalState(program_state, "_QMdl_timerPtimer_start", [start_call.operands[0].type,
+      start_call.operands[1].type, start_call.operands[2].type], None)
 
     return op_ctrl+op_desc+[convert_op, embox_to_found, embox_op, absent_op, start_call]
 
@@ -1358,12 +1358,12 @@ def translate_timer_stop_intrinsic_call_expr(ctx: SSAValueCtx,
     op_ctrl, arg_ctrl = translate_expr(ctx, call_expr.args.blocks[0].ops.first, program_state)
 
     assert isinstance(arg_ctrl.owner, fir.Load)
-    assert arg_ctrl.owner.memref.typ == fir.ReferenceType([i32])
+    assert arg_ctrl.owner.memref.type == fir.ReferenceType([i32])
 
     stop_call=fir.Call.create(attributes={"callee": SymbolRefAttr("_QMdl_timerPtimer_stop")},
       operands=[arg_ctrl.owner.memref], result_types=[])
 
-    insertExternalFunctionToGlobalState(program_state, "_QMdl_timerPtimer_stop", [stop_call.operands[0].typ], None)
+    insertExternalFunctionToGlobalState(program_state, "_QMdl_timerPtimer_stop", [stop_call.operands[0].type], None)
 
     return op_ctrl+[stop_call]
 
@@ -1390,17 +1390,17 @@ def translate_print_intrinsic_call_expr(ctx: SSAValueCtx,
       # For each argument need to issue a different print
       op, arg = translate_expr(ctx, argument, program_state)
       # Now do the actual print
-      if isinstance(arg.typ, IntegerType) or isinstance(arg.typ, AnyFloat):
+      if isinstance(arg.type, IntegerType) or isinstance(arg.type, AnyFloat):
         arg_operands.extend(generatePrintForIntegerOrFloat(program_state, op[0], arg, call1.results[0]))
 
 
-      if isinstance(arg.typ, fir.ReferenceType):
-        if isinstance(arg.typ.type, fir.IntegerType) or isinstance(arg.typ.type, AnyFloat):
-          load_op=fir.Load.create(operands=[arg], result_types=[arg.typ.type])
+      if isinstance(arg.type, fir.ReferenceType):
+        if isinstance(arg.type.type, fir.IntegerType) or isinstance(arg.type.type, AnyFloat):
+          load_op=fir.Load.create(operands=[arg], result_types=[arg.type.type])
           print_ops=generatePrintForIntegerOrFloat(program_state, load_op, load_op.results[0], call1.results[0])
           arg_operands.append(ops.first)
           arg_operands.extend(print_ops)
-        if isinstance(arg.typ.type, fir.CharacterType):
+        if isinstance(arg.type.type, fir.CharacterType):
           # This is a reference to a string
           arg_operands.extend(generatePrintForString(program_state, op[0], arg, call1.results[0]))
 
@@ -1414,37 +1414,37 @@ def translate_print_intrinsic_call_expr(ctx: SSAValueCtx,
     return arg_operands
 
 def generatePrintForIntegerOrFloat(program_state, op, arg, init_call_ssa):
-    if isinstance(arg.typ, IntegerType):
-      if arg.typ.width.data == 64:
+    if isinstance(arg.type, IntegerType):
+      if arg.type.width.data == 64:
         fn_name="_FortranAioOutputInteger64"
-      elif arg.typ.width.data == 32:
+      elif arg.type.width.data == 32:
         fn_name="_FortranAioOutputInteger32"
       else:
-        raise Exception(f"Could not translate integer width`{arg.typ.width.data}' as only 32 or 64 bit supported")
-    elif isinstance(arg.typ, AnyFloat):
-      if isinstance(arg.typ, Float32Type):
+        raise Exception(f"Could not translate integer width`{arg.type.width.data}' as only 32 or 64 bit supported")
+    elif isinstance(arg.type, AnyFloat):
+      if isinstance(arg.type, Float32Type):
         fn_name="_FortranAioOutputReal32"
-      elif isinstance(arg.typ, Float64Type):
+      elif isinstance(arg.type, Float64Type):
         fn_name="_FortranAioOutputReal64"
       else:
-        raise Exception(f"Could not translate float type`{arg.typ}' as only 32 or 64 bit supported")
+        raise Exception(f"Could not translate float type`{arg.type}' as only 32 or 64 bit supported")
     else:
-      raise Exception(f"Could not translate type`{arg.typ}' for printing")
+      raise Exception(f"Could not translate type`{arg.type}' for printing")
     print_call=fir.Call.create(attributes={"callee": SymbolRefAttr(fn_name)}, operands=[init_call_ssa,
           arg], result_types=[IntegerType(1)])
-    insertExternalFunctionToGlobalState(program_state, fn_name, [init_call_ssa.typ, arg.typ], IntegerType(1))
+    insertExternalFunctionToGlobalState(program_state, fn_name, [init_call_ssa.type, arg.type], IntegerType(1))
     return [op, print_call]
 
 def generatePrintForString(program_state, op, arg, init_call_ssa):
-    from_num=arg.typ.type.from_index.data
-    to_num=arg.typ.type.to_index.data
+    from_num=arg.type.type.from_index.data
+    to_num=arg.type.type.to_index.data
     string_length=((to_num-from_num)+1)
     str_len=arith.Constant.create(attributes={"value": IntegerAttr.from_index_int_value(string_length)}, result_types=[IndexType()])
     arg2_2=fir.Convert.create(operands=[arg], result_types=[fir.ReferenceType([IntegerType(8)])])
     arg3_2=fir.Convert.create(operands=[str_len.results[0]], result_types=[i64])
     print_call=fir.Call.create(attributes={"callee": SymbolRefAttr("_FortranAioOutputAscii")}, operands=[init_call_ssa,
           arg2_2.results[0], arg3_2.results[0]], result_types=[IntegerType(1)])
-    insertExternalFunctionToGlobalState(program_state, "_FortranAioOutputAscii", [init_call_ssa.typ,
+    insertExternalFunctionToGlobalState(program_state, "_FortranAioOutputAscii", [init_call_ssa.type,
         fir.ReferenceType([IntegerType(8)]), i64], IntegerType(1))
     return [op, str_len, arg2_2, arg3_2, print_call]
 
@@ -1468,9 +1468,9 @@ def translate_deallocate_intrinsic_call_expr(ctx: SSAValueCtx,
     # We use the load initially here to load in the box and unbox it
     target_ssa=op[0].operands[0]
 
-    box_type=get_nested_type(target_ssa.typ, fir.BoxType)
-    heap_type=get_nested_type(target_ssa.typ, fir.HeapType)
-    array_type=get_nested_type(target_ssa.typ, fir.SequenceType)
+    box_type=get_nested_type(target_ssa.type, fir.BoxType)
+    heap_type=get_nested_type(target_ssa.type, fir.HeapType)
+    array_type=get_nested_type(target_ssa.type, fir.SequenceType)
     num_deferred=count_array_type_contains_deferred(array_type)
 
     load_op=fir.Load.create(operands=[target_ssa], result_types=[box_type])
@@ -1509,8 +1509,8 @@ def translate_allocate_intrinsic_call_expr(ctx: SSAValueCtx,
         convert_op=fir.Convert.create(operands=[ssa_arg], result_types=[IndexType()])
         ops.append(convert_op)
         args.append(convert_op.results[0])
-    heap_type=get_nested_type(target_ssa.typ, fir.HeapType)
-    array_type=get_nested_type(target_ssa.typ, fir.SequenceType)
+    heap_type=get_nested_type(target_ssa.type, fir.HeapType)
+    array_type=get_nested_type(target_ssa.type, fir.SequenceType)
 
     allocmem_op=fir.Allocmem.build(attributes={"in_type":array_type, "uniq_name": StringAttr(var_name+".alloc")}, operands=[[], args], regions=[[]], result_types=[heap_type])
     shape_op=fir.Shape.create(operands=args, result_types=[fir.ShapeType([IntAttr(len(args))])])
@@ -1544,7 +1544,7 @@ def translate_user_call_expr(ctx: SSAValueCtx,
     for index, arg in enumerate(call_expr.args.blocks[0].ops):
         op, arg = translate_expr(ctx, arg, program_state)
         if op is not None: ops += op
-        type_to_reference=arg.typ
+        type_to_reference=arg.type
         if not isinstance(type_to_reference, fir.ReferenceType) and not isinstance(type_to_reference, fir.SequenceType):
           if isinstance(type_to_reference, fir.HeapType):
             type_to_reference=type_to_reference.type
@@ -1552,7 +1552,7 @@ def translate_user_call_expr(ctx: SSAValueCtx,
             ops+=[convert_op]
             args.append(convert_op.results[0])
           else:
-            reference_creation=fir.Alloca.build(attributes={"in_type":arg.typ, "valuebyref": UnitAttr()}, operands=[[],[]],
+            reference_creation=fir.Alloca.build(attributes={"in_type":arg.type, "valuebyref": UnitAttr()}, operands=[[],[]],
                               regions=[[]], result_types=[fir.ReferenceType([type_to_reference])])
             store_op=fir.Store.create(operands=[arg, reference_creation.results[0]])
             ops+=[reference_creation, store_op]
@@ -1616,26 +1616,26 @@ def try_translate_expr(
       if isinstance(ssa_value, BlockArgument):
         # This is a block argument, therefore already loaded when was passed in
         return [], ssa_value
-      has_nested_type = hasattr(ssa_value.typ, "type")
+      has_nested_type = hasattr(ssa_value.type, "type")
       assert isinstance(ssa_value, SSAValue)
       # We are limited here with type handling, need other floats - maybe a better way of doing this?
-      if isinstance(ssa_value.typ, fir.SequenceType):
+      if isinstance(ssa_value.type, fir.SequenceType):
         return None, ssa_value
-      elif isinstance(ssa_value.typ, mpi.VectorType):
+      elif isinstance(ssa_value.type, mpi.VectorType):
         return None, ssa_value
-      elif isinstance(ssa_value.typ, IntegerType) or (has_nested_type and isinstance(ssa_value.typ.type, IntegerType)):
+      elif isinstance(ssa_value.type, IntegerType) or (has_nested_type and isinstance(ssa_value.type.type, IntegerType)):
         result_type=i32
-      elif isinstance(ssa_value.typ, Float32Type) or (has_nested_type and isinstance(ssa_value.typ.type, Float32Type)):
+      elif isinstance(ssa_value.type, Float32Type) or (has_nested_type and isinstance(ssa_value.type.type, Float32Type)):
         result_type=f32
-      elif isinstance(ssa_value.typ, Float64Type) or (has_nested_type and isinstance(ssa_value.typ.type, Float64Type)):
+      elif isinstance(ssa_value.type, Float64Type) or (has_nested_type and isinstance(ssa_value.type.type, Float64Type)):
         result_type=f64
-      elif isinstance(ssa_value.typ, fir.SequenceType) or (has_nested_type and isinstance(ssa_value.typ.type, fir.SequenceType)):
+      elif isinstance(ssa_value.type, fir.SequenceType) or (has_nested_type and isinstance(ssa_value.type.type, fir.SequenceType)):
         # Already have created the addressof reference so just return this
         return None, ssa_value
-      elif isinstance(ssa_value.typ.type, fir.BoxType):
+      elif isinstance(ssa_value.type.type, fir.BoxType):
         # If it is a box type then unbox it
-        load_op=fir.Load.create(operands=[ssa_value], result_types=[ssa_value.typ.type])
-        boxaddr_op=fir.BoxAddr.create(operands=[load_op.results[0]], result_types=[ssa_value.typ.type.type])
+        load_op=fir.Load.create(operands=[ssa_value], result_types=[ssa_value.type.type])
+        boxaddr_op=fir.BoxAddr.create(operands=[load_op.results[0]], result_types=[ssa_value.type.type.type])
         return [load_op, boxaddr_op], boxaddr_op.results[0]
 
       # This is a bit wierd, we have looked into the types of the reference and handled
@@ -1670,12 +1670,12 @@ def try_translate_expr(
     assert False, "Unknown Expression"
 
 def unpack_mpi_array(ctx: SSAValueCtx, op: psy_ir.ArrayReference, program_state : ProgramState):
-    assert isinstance(ctx[op.var.var_name.data].typ, mpi.VectorType)
+    assert isinstance(ctx[op.var.var_name.data].type, mpi.VectorType)
     # For now just support one dimensional access here to keep simple
     assert len(op.accessors.blocks[0].ops) == 1
     expr, ssa=try_translate_expr(ctx, op.accessors.blocks[0].ops.first, program_state)
 
-    access_op=mpi.VectorGetOp.get(ctx[op.var.var_name.data], ssa)
+    access_op=mpi.VectorGetOp(ctx[op.var.var_name.data], ssa)
     return expr+[access_op], access_op.results[0]
 
 def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, program_state : ProgramState):
@@ -1684,15 +1684,15 @@ def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, 
 
   base_type=None
 
-  if isinstance(ctx[op.var.var_name.data].typ, mpi.VectorType):
+  if isinstance(ctx[op.var.var_name.data].type, mpi.VectorType):
     # If this is an mpi array then we handle it differently
     return unpack_mpi_array(ctx, op, program_state)
 
-  if (has_nested_type(ctx[op.var.var_name.data].typ, fir.BoxType) and has_nested_type(ctx[op.var.var_name.data].typ, fir.HeapType)):
+  if (has_nested_type(ctx[op.var.var_name.data].type, fir.BoxType) and has_nested_type(ctx[op.var.var_name.data].type, fir.HeapType)):
     # We need to debox this
-    box_type=get_nested_type(ctx[op.var.var_name.data].typ, fir.BoxType)
-    heap_type=get_nested_type(ctx[op.var.var_name.data].typ, fir.HeapType)
-    array_type=get_nested_type(ctx[op.var.var_name.data].typ, fir.SequenceType)
+    box_type=get_nested_type(ctx[op.var.var_name.data].type, fir.BoxType)
+    heap_type=get_nested_type(ctx[op.var.var_name.data].type, fir.HeapType)
+    array_type=get_nested_type(ctx[op.var.var_name.data].type, fir.SequenceType)
 
     load_op=fir.Load.create(operands=[ctx[op.var.var_name.data]], result_types=[box_type])
 
@@ -1710,7 +1710,7 @@ def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, 
     convert_to_1d_op=fir.Convert.create(operands=[boxaddr_op.results[0]], result_types=[fir.ReferenceType([fir_type])])
 
     expressions+=[load_op] + ops_to_add + [boxaddr_op, convert_to_1d_op]
-    base_type=convert_to_1d_op.results[0].typ
+    base_type=convert_to_1d_op.results[0].type
 
     ssa_list.append(convert_to_1d_op.results[0])
 
@@ -1719,7 +1719,7 @@ def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, 
       expr, ssa=try_translate_expr(ctx, accessor, program_state)
       expressions.extend(expr)
 
-      index_conv=perform_data_conversion_if_needed(ssa, boxdims_ops[idx].results[0].typ)
+      index_conv=perform_data_conversion_if_needed(ssa, boxdims_ops[idx].results[0].type)
       if index_conv is not None:
         expressions.append(index_conv)
         ssa=index_conv.results[0]
@@ -1746,7 +1746,7 @@ def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, 
   else:
     # This is a reference to an array, nice and easy just use it directly
     ssa_list.append(ctx[op.var.var_name.data])
-    base_type=ctx[op.var.var_name.data].typ
+    base_type=ctx[op.var.var_name.data].type
 
     for idx, accessor in enumerate(op.accessors.blocks[0].ops):
       # A lot of this is doing the subtraction to zero-base each index (default is starting at 1 in Fortran)
@@ -1758,7 +1758,7 @@ def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, 
                                           result_types=[i64])
       expressions.append(subtraction_index)
 
-      lhs_conv_type, rhs_conv_type=get_expression_conversion_type(ssa.typ, subtraction_index.results[0].typ)
+      lhs_conv_type, rhs_conv_type=get_expression_conversion_type(ssa.type, subtraction_index.results[0].type)
 
       lhs_conv=perform_data_conversion_if_needed(ssa, lhs_conv_type)
       if lhs_conv is not None:
@@ -1792,14 +1792,14 @@ def translate_nary_expr(ctx: SSAValueCtx,
   for op in unary_expr.expr.blocks[0].ops:
     expr, expr_ssa_value = translate_expr(ctx, op, program_state)
 
-    if isinstance(expr_ssa_value.typ, fir.ReferenceType):
-      load_op=fir.Load.create(operands=[expr_ssa_value], result_types=[expr_ssa_value.typ.type])
+    if isinstance(expr_ssa_value.type, fir.ReferenceType):
+      load_op=fir.Load.create(operands=[expr_ssa_value], result_types=[expr_ssa_value.type.type])
       expr.append(load_op)
       expr_ssa_value=load_op.results[0]
 
     if ssa_type is None:
-      ssa_type=expr_ssa_value.typ
-    if ssa_type != expr_ssa_value.typ:
+      ssa_type=expr_ssa_value.type
+    if ssa_type != expr_ssa_value.type:
       raise Exception(f"All operand types must be same type for nary operation")
     expr_ssa.append(expr_ssa_value)
     ops_to_add+=expr
@@ -1813,8 +1813,8 @@ def translate_nary_expr(ctx: SSAValueCtx,
     prev_min_ssa=expr_ssa[0]
     comparison_op=arith.Cmpi if isinstance(ssa_type, IntegerType) else arith.Cmpf
     for idx in range(1, len(expr_ssa)):
-      compare_op=comparison_op.get(prev_min_ssa, expr_ssa[idx], comparison_op_str)
-      select_op=arith.Select.get(compare_op.results[0], prev_min_ssa, expr_ssa[idx])
+      compare_op=comparison_op(prev_min_ssa, expr_ssa[idx], comparison_op_str)
+      select_op=arith.Select(compare_op.results[0], prev_min_ssa, expr_ssa[idx])
       prev_min_ssa=select_op.results[0]
       ops_to_add+=[compare_op, select_op]
     return ops_to_add, prev_min_ssa
@@ -1827,8 +1827,8 @@ def translate_unary_expr(ctx: SSAValueCtx,
 
   expr, expr_ssa_value = translate_expr(ctx, unary_expr.expr.blocks[0].ops.first, program_state)
 
-  if isinstance(expr_ssa_value.typ, fir.ReferenceType):
-    load_op=fir.Load.create(operands=[expr_ssa_value], result_types=[expr_ssa_value.typ.type])
+  if isinstance(expr_ssa_value.type, fir.ReferenceType):
+    load_op=fir.Load.create(operands=[expr_ssa_value], result_types=[expr_ssa_value.type.type])
     expr.append(load_op)
     expr_ssa_value=load_op.results[0]
 
@@ -1838,34 +1838,34 @@ def translate_unary_expr(ctx: SSAValueCtx,
   if (attr.data == "NOT"):
     constant_true=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(1, 1)},
                                          result_types=[IntegerType(1)])
-    xori=arith.XOrI.get(expr_ssa_value, constant_true.results[0])
+    xori=arith.XOrI(expr_ssa_value, constant_true.results[0])
 
     return expr + [constant_true, xori], xori.results[0]
 
   if (attr.data == "SQRT"):
-    sqrt_op=math.SqrtOp.get(expr_ssa_value)
+    sqrt_op=math.SqrtOp(expr_ssa_value)
     return expr + [sqrt_op], sqrt_op.results[0]
 
   if (attr.data == "ABS"):
-    if isinstance(expr_ssa_value.typ, AnyFloat):
-      abs_op=math.AbsFOp.get(expr_ssa_value)
+    if isinstance(expr_ssa_value.type, AnyFloat):
+      abs_op=math.AbsFOp(expr_ssa_value)
       return expr + [abs_op], abs_op.results[0]
-    elif isinstance(expr_ssa_value.typ, IntegerType):
-      abs_op=math.AbsIOp.get(expr_ssa_value)
+    elif isinstance(expr_ssa_value.type, IntegerType):
+      abs_op=math.AbsIOp(expr_ssa_value)
       return expr + [abs_op], abs_op.results[0]
     else:
-      raise Exception(f"Can only issue abs on int or float, but issued on {expr_ssa_value.typ}")
+      raise Exception(f"Can only issue abs on int or float, but issued on {expr_ssa_value.type}")
 
   if (attr.data == "MINUS"):
-    if isinstance(expr_ssa_value.typ, AnyFloat):
-      negf_op=arith.Negf.get(expr_ssa_value)
+    if isinstance(expr_ssa_value.type, AnyFloat):
+      negf_op=arith.Negf(expr_ssa_value)
       return expr + [negf_op], negf_op.results[0]
-    elif isinstance(expr_ssa_value.typ, IntegerType):
-      constant_op=arith.Constant.create(attributes={"value": IntegerAttr(0, expr_ssa_value.typ)}, result_types=[expr_ssa_value.typ])
-      sub_op=arith.Subi.get(constant_op, expr_ssa_value)
+    elif isinstance(expr_ssa_value.type, IntegerType):
+      constant_op=arith.Constant.create(attributes={"value": IntegerAttr(0, expr_ssa_value.type)}, result_types=[expr_ssa_value.type])
+      sub_op=arith.Subi(constant_op, expr_ssa_value)
       return expr + [constant_op, sub_op], sub_op.results[0]
     else:
-      raise Exception(f"Can only issue minus on int or float, but issued on {expr_ssa_value.typ}")
+      raise Exception(f"Can only issue minus on int or float, but issued on {expr_ssa_value.type}")
 
   raise Exception(f"Unable to handle unary expression `{attr.data}`")
 
@@ -1899,19 +1899,19 @@ def translate_binary_expr(
         binary_expr: psy_ir.BinaryOperation, program_state : ProgramState) -> Tuple[List[Operation], SSAValue]:
     lhs, lhs_ssa_value = translate_expr(ctx, binary_expr.lhs.blocks[0].ops.first, program_state)
     rhs, rhs_ssa_value = translate_expr(ctx, binary_expr.rhs.blocks[0].ops.first, program_state)
-    result_type = lhs_ssa_value.typ
+    result_type = lhs_ssa_value.type
 
-    if isinstance(lhs_ssa_value.typ, fir.ReferenceType):
-      load_op=fir.Load.create(operands=[lhs_ssa_value], result_types=[lhs_ssa_value.typ.type])
+    if isinstance(lhs_ssa_value.type, fir.ReferenceType):
+      load_op=fir.Load.create(operands=[lhs_ssa_value], result_types=[lhs_ssa_value.type.type])
       lhs.append(load_op)
       lhs_ssa_value=load_op.results[0]
 
-    if isinstance(rhs_ssa_value.typ, fir.ReferenceType):
-      load_op=fir.Load.create(operands=[rhs_ssa_value], result_types=[rhs_ssa_value.typ.type])
+    if isinstance(rhs_ssa_value.type, fir.ReferenceType):
+      load_op=fir.Load.create(operands=[rhs_ssa_value], result_types=[rhs_ssa_value.type.type])
       rhs.append(load_op)
       rhs_ssa_value=load_op.results[0]
 
-    lhs_conv_type, rhs_conv_type=get_expression_conversion_type(lhs_ssa_value.typ, rhs_ssa_value.typ)
+    lhs_conv_type, rhs_conv_type=get_expression_conversion_type(lhs_ssa_value.type, rhs_ssa_value.type)
     lhs_conv=perform_data_conversion_if_needed(lhs_ssa_value, lhs_conv_type)
     if lhs_conv is not None:
       lhs.append(lhs_conv)
@@ -1922,7 +1922,7 @@ def translate_binary_expr(
       rhs.append(rhs_conv)
       rhs_ssa_value=rhs_conv.results[0]
 
-    #assert (lhs_ssa_value.typ == rhs_ssa_value.typ) or isinstance(lhs_ssa_value.typ, fir.ReferenceType) or isinstance(rhs_ssa_value.typ, fir.ReferenceType)
+    #assert (lhs_ssa_value.type == rhs_ssa_value.type) or isinstance(lhs_ssa_value.type, fir.ReferenceType) or isinstance(rhs_ssa_value.type, fir.ReferenceType)
 
     attr = binary_expr.op
     assert isinstance(attr, Attribute)
@@ -1932,24 +1932,24 @@ def translate_binary_expr(
     return lhs + rhs + [fir_binary_expr], fir_binary_expr.results[0]
 
 def get_arith_instance(operation:str, lhs, rhs, program_state : ProgramState):
-  operand_type = lhs.typ
+  operand_type = lhs.type
   if operation in binary_arith_op_matching:
     if isinstance(operand_type, IntegerType): index=0
     if isinstance(operand_type, Float16Type) or isinstance(operand_type, Float32Type) or isinstance(operand_type, Float64Type): index=1
     op_instance=binary_arith_op_matching[operation][index]
     if op_instance is None and operation == "POW":
-      if (lhs.typ == f64 or lhs.typ == f32) and (rhs.typ == f64 or rhs.typ == f32):
+      if (lhs.type == f64 or lhs.type == f32) and (rhs.type == f64 or rhs.type == f32):
         # Use math.powf
-        return math.PowFOp.get(lhs, rhs)
-      elif (lhs.typ == f64 or lhs.typ == f32) and (rhs.typ == i32):
+        return math.PowFOp(lhs, rhs)
+      elif (lhs.type == f64 or lhs.type == f32) and (rhs.type == i32):
         # Will call math.ipowi for integer, otherwise call into LLVM function directly
-        call_name="llvm.powi."+str(lhs.typ)+".i32"
+        call_name="llvm.powi."+str(lhs.type)+".i32"
         fn_call_op=fir.Call.create(attributes={"callee": SymbolRefAttr(call_name)},
-            operands=[lhs, rhs], result_types=[lhs.typ])
-        insertExternalFunctionToGlobalState(program_state, call_name, [lhs.typ, rhs.typ], lhs.typ)
+            operands=[lhs, rhs], result_types=[lhs.type])
+        insertExternalFunctionToGlobalState(program_state, call_name, [lhs.type, rhs.type], lhs.type)
         return fn_call_op
       else:
-        raise Exception(f"Could not translate `{lhs.typ}' and '{rhs.typ}' for POW operation")
+        raise Exception(f"Could not translate `{lhs.type}' and '{rhs.type}' for POW operation")
     assert op_instance is not None, "Operation "+operation+" not implemented for type"
 
     attributes=dir(op_instance)
@@ -1966,7 +1966,7 @@ def get_arith_instance(operation:str, lhs, rhs, program_state : ProgramState):
     return arith.OrI(lhs, rhs)
 
   if operation in binary_arith_psy_to_arith_comparison_op:
-    return arith.Cmpi.get(lhs, rhs, binary_arith_psy_to_arith_comparison_op[operation])
+    return arith.Cmpi(lhs, rhs, binary_arith_psy_to_arith_comparison_op[operation])
 
   raise Exception(f"Unable to handle arithmetic instance `{operation}`")
 
@@ -1977,7 +1977,7 @@ def translate_literal(op: psy_ir.Literal, program_state : ProgramState) -> Opera
 
     if isinstance(value, IntegerAttr):
         return arith.Constant.create(attributes={"value": value},
-                                         result_types=[value.typ])
+                                         result_types=[value.type])
 
     if isinstance(value, psy_ir.FloatAttr):
         return arith.Constant.create(attributes={"value": value},

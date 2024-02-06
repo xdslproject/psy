@@ -27,11 +27,11 @@ class PsyOptMain(xDSLOptMain):
 
     def register_all_passes(self):
         super().register_all_passes()
-        self.register_pass(ApplyStencilAnalysis)
-        self.register_pass(LowerPsyIR)
-        self.register_pass(ExtractStencil)
-        self.register_pass(RewriteFIRToStandard)
-        self.register_pass(InferGPUDataTransfer)
+        self.register_pass("apply-stencil-analysis", lambda: ApplyStencilAnalysis)
+        self.register_pass("lower-psy-ir", lambda: LowerPsyIR)
+        self.register_pass("extract-stencil", lambda: ExtractStencil)
+        self.register_pass("rewrite-fir-to-standard", lambda: RewriteFIRToStandard)
+        self.register_pass("infer-gpu-data-transfer", lambda: InferGPUDataTransfer)
 
     def register_all_targets(self):
         super().register_all_targets()
@@ -51,12 +51,11 @@ class PsyOptMain(xDSLOptMain):
     def register_all_dialects(self):
         super().register_all_dialects()
         """Register all dialects that can be used."""
-        self.ctx.register_dialect(psyIR)
-        self.ctx.register_dialect(psyStencil)
+        self.ctx.load_dialect(psyIR)
+        self.ctx.load_dialect(psyStencil)
 
     @staticmethod
-    def get_passes_as_dict(
-    ) -> Dict[str, Callable[[MLContext, ModuleOp], None]]:
+    def get_passes_as_dict() -> Dict[str, Callable[[MLContext, ModuleOp], None]]:
         """Add all passes that can be called by psy-opt in a dictionary."""
 
         pass_dictionary = {}
@@ -107,7 +106,7 @@ def _empty_generate_dir():
 
 def __main__():
     psy_main = PsyOptMain()
-
+    
     try:
         psy_main.run()
         if psy_main.args.output_module_files:
