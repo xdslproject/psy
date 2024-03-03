@@ -46,7 +46,7 @@ class RewriteFirConvert(RewritePattern):
     if new_conv is not None: rewriter.replace_matched_op(new_conv)
 
 
-@dataclass
+@dataclass(frozen=True)
 class RewriteFIRToStandard(ModulePass):
   """
   This is the entry point for the transformation pass which will then apply the rewriter

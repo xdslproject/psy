@@ -382,7 +382,7 @@ class ConnectExternalStoreToFunctionInput(RewritePattern):
     # Look up the external load and then external store to that operand
     op.operands=[op.temp, op.temp.op.field]
 
-@dataclass
+@dataclass(frozen=True)
 class ExtractStencil(ModulePass):
   """
   This is the entry point for the transformation pass which will then apply the rewriter

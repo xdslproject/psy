@@ -620,7 +620,7 @@ class RewriteIntermediateResultAccesses(RewritePattern):
 
 
 
-@dataclass
+@dataclass(frozen=True)
 class ApplyStencilAnalysis(ModulePass):
   """
   This is the entry point for the transformation pass which will then apply the rewriter

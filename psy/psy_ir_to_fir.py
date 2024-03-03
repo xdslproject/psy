@@ -150,7 +150,7 @@ class ProgramState:
   def getStencilIntermediateResult(self, name):
     return self.stencil_intermediate_results[name]
 
-@dataclass
+@dataclass(frozen=True)
 class LowerPsyIR(ModulePass):
 
   name = 'lower-psy-ir'

@@ -311,7 +311,7 @@ class GenerateDataCopyBack():
     return copy_back_fn, call_data_convert_ops, external_fn_def
 
 
-@dataclass
+@dataclass(frozen=True)
 class InferGPUDataTransfer(ModulePass):
   """
   This is the entry point for the transformation pass which will then apply the rewriter
