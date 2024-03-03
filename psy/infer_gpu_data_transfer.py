@@ -77,11 +77,15 @@ class GatherStencilBridgedFunctions(Visitor):
       arg_names=[]
       arg_ssas=[]
       for op in call_op.args:
-        # This is a convert, now walk backwards to grab the symbol
-        assert isa(op.owner, fir.Convert)
-        data_symbol=GatherStencilBridgedFunctions.get_symbol(op.owner)
-        self.gpu_data_symbols.append(data_symbol)
-        arg_names.append(data_symbol[0].root_reference.data)
+        if isa(op.owner, fir.Convert):
+          # This is a convert, now walk backwards to grab the symbol
+          # An array, we care about this!
+          data_symbol=GatherStencilBridgedFunctions.get_symbol(op.owner)
+          self.gpu_data_symbols.append(data_symbol)
+          arg_names.append(data_symbol[0].root_reference.data)
+        elif isa(op.owner, fir.Load):
+          # A scalar, we do not care, add a placeholder to ignore
+          arg_names.append(None)
         arg_ssas.append(op)
 
       self.stencil_invokes.append(GPU_Stencil_Invocation(fn_name, call_op, arg_names, arg_ssas))
@@ -340,15 +344,19 @@ class InferGPUDataTransfer(ModulePass):
 
     for stencil_invoke in stencil_bridged_functions.stencil_invokes:
       for idx, arg_name in enumerate(stencil_invoke.arg_names):
-        ssa_index=InferGPUDataTransfer.find_array_index(arg_name, stencil_bridged_functions)
-        stencil_invoke.arg_ssas[idx]=call_ops[ssa_index].results[0]
+        if arg_name is not None:
+          ssa_index=InferGPUDataTransfer.find_array_index(arg_name, stencil_bridged_functions)
+          stencil_invoke.arg_ssas[idx]=call_ops[ssa_index].results[0]
 
       new_call_op=fir.Call.create(attributes={"callee": builtin.SymbolRefAttr(stencil_invoke.name)}, operands=stencil_invoke.arg_ssas, result_types=[])
       stencil_invoke.call_op.parent.insert_op_after(new_call_op, stencil_invoke.call_op)
       stencil_invoke.call_op.parent.erase_op(stencil_invoke.call_op)
       # Now erase all data loading for the origional call op
       for op in stencil_invoke.call_op.args:
-        InferGPUDataTransfer.erase_unused_data_ops(op.owner)
+        if isa(op.owner, fir.Convert):
+          # If owner is a convert then it's an array, therefore delete the loading as we use the pointer
+          # instead, otherwise it is passing a scalar (is a load) and we need to keep that
+          InferGPUDataTransfer.erase_unused_data_ops(op.owner)
 
     stencils_module.regions[0].block.add_ops(alloc_funcs)
     driver_module.regions[0].block.add_ops(external_alloc_func_defs)
