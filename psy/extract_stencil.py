@@ -86,7 +86,7 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
 
     def stencilApplyNeedsArgsRewriting(stencil_apply):
       for arg in stencil_apply.args:
-        if not isinstance(arg.typ, stencil.TempType):
+        if not isinstance(arg.type, stencil.TempType):
           return True
       return False
 
@@ -97,7 +97,7 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
       # With any number of array dimensions
       # In this case need to load and debox it, that gives us a heap
       # we can then convert to an llvm pointer
-      data_type=external_load_op.field.owner.inputs[0].typ
+      data_type=external_load_op.field.owner.inputs[0].type
       assert isinstance(data_type, fir.ReferenceType)
       assert ExtractStencilOps.has_nested_type(data_type, fir.HeapType)
 
@@ -169,7 +169,7 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
       for key, value in itertools.chain(input_args_to_ops.items(), output_args_to_ops.items()):
           external_load_op=ExtractStencilOps.find_ExternalLoad(value)
           if external_load_op is not None:
-            nt=self.get_nested_type(external_load_op.field.typ, fir.SequenceType)
+            nt=self.get_nested_type(external_load_op.field.type, fir.SequenceType)
             ptr_type=fir.LLVMPointerType([nt.type])
             op_types.append(ptr_type)
             if isinstance(external_load_op.field.owner, builtin.UnrealizedConversionCastOp):
@@ -185,7 +185,7 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
           else:
             # Is a scalar variable, pass this in directly
             arg_ops.append(key.owner)
-            op_types.append(key.typ)
+            op_types.append(key.type)
 
       parent=apply_stencil_op.parent
 
@@ -206,7 +206,7 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
       if ExtractStencilOps.stencilApplyNeedsArgsRewriting(apply_stencil_op):
         new_args=[]
         for index, arg in enumerate(apply_stencil_op.args):
-          if isinstance(arg.typ, stencil.TempType):
+          if isinstance(arg.type, stencil.TempType):
             new_args.append(arg)
           else:
             new_args.append(stencil_bridge_fn.args[index])
@@ -214,7 +214,7 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
         apply_stencil_op.region.detach_block(0)
         result_types=[]
         for res in apply_stencil_op.res:
-          result_types.append(res.typ)
+          result_types.append(res.type)
         new_stencil=stencil.ApplyOp.get(new_args, block, result_types)
         rewriter.replace_matched_op(new_stencil)
 
@@ -244,8 +244,8 @@ class AddExternalFuncDefs(RewritePattern):
             if op.callee.string_value() not in self.bridge_functions:
                 return
             funcs_to_emit[op.callee.string_value()] = (
-                [arg.typ for arg in op.args],
-                [res.typ for res in op.results],
+                [arg.type for arg in op.args],
+                [res.type for res in op.results],
             )
 
         for o in module.walk():
@@ -287,7 +287,7 @@ class ConnectExternalLoadToFunctionInput(RewritePattern):
   def get_parent_arg(self, ptr_arg_num, func_op):
     current_index=-1
     for arg in func_op.args:
-      if isinstance(arg.typ, llvm.LLVMPointerType):
+      if isinstance(arg.type, llvm.LLVMPointerType):
         current_index+=1
         if current_index==ptr_arg_num: return arg
     assert False
@@ -299,9 +299,9 @@ class ConnectExternalLoadToFunctionInput(RewritePattern):
   @op_type_rewrite_pattern
   def match_and_rewrite(self, op: stencil.ExternalLoadOp, rewriter: PatternRewriter, /):
     # If this already accepts a memref then don't need to wrap pointer
-    if isinstance(op.field.typ, MemRefType): return
+    if isinstance(op.field.type, MemRefType): return
 
-    array_type=ConnectExternalLoadToFunctionInput.get_nested_type(op.field.typ, fir.SequenceType)
+    array_type=ConnectExternalLoadToFunctionInput.get_nested_type(op.field.type, fir.SequenceType)
     number_dims=len(array_type.shape.data)
 
     op_list=[sop for sop in op.parent.ops]
@@ -315,7 +315,7 @@ class ConnectExternalLoadToFunctionInput(RewritePattern):
 
     num_prev_external_loads=ConnectExternalLoadToFunctionInput.count_instances_preceeding(op.parent.ops, idx-1, stencil.ExternalLoadOp)
 
-    ptr_type=op.field.typ
+    ptr_type=op.field.type
     # If this is not already an LLVM pointer then extract out the scalar type and type to
     # be an LLVM pointer to this
     if not isinstance(ptr_type, llvm.LLVMPointerType):

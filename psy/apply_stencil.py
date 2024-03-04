@@ -226,9 +226,10 @@ class RemoveEmptyLoops(RewritePattern):
   @op_type_rewrite_pattern
   def match_and_rewrite(
             self, for_loop: psy_ir.Loop, rewriter: PatternRewriter):
-      if len(for_loop.body.blocks[0].ops) == 0:
-        for_loop.detach()
-
+      #if len(for_loop.body.blocks[0].ops) == 0:
+      #  for_loop.detach()
+      pass
+      
 class ReplaceStencilDimensionVarWithStencilIndex(RewritePattern):
   def __init__(self, loop_indicies):
     self.loop_indicies=loop_indicies
@@ -328,13 +329,17 @@ class ApplyStencilRewriter(RewritePattern):
         for read_var_name in visitor.written_to_read[index]:
           read_var_v=visitor.read_variables[read_var_name]
           read_vars.append(read_var_v.var)
+
           if isinstance(read_var_v, psy_ir.ArrayReference):
+            print(f"{read_var_name}:{type(read_var_v)} {read_var_v.accessors.blocks[0].ops}")
             for idx in read_var_v.accessors.blocks[0].ops:
               v2=CollectArrayVariableIndexes()
+              print(f"{idx}")
               v2.traverse(idx)
+              print(f"{read_var_name}{v2.array_indexes}")
               access_variables.extend(v2.array_indexes)
 
-        #if len(access_variables) == 0: return None, None, None
+        if len(access_variables) == 0: return None, None, None
 
         written_var=visitor.written_variables[target_var_name][unique_var_idx]
 
@@ -428,12 +433,14 @@ class ApplyStencilRewriter(RewritePattern):
           deferred_info_ops=[]
 
           top_level_dag_node=ApplyStencilRewriter.get_dag_top_level(for_loop)
-          for field in read_vars:
-            deferred=ApplyStencilRewriter.look_up_deferred_array_sizes(field, top_level_dag_node)
+          
+          if len(read_vars) > 1:
+            for field in read_vars:
+              deferred=ApplyStencilRewriter.look_up_deferred_array_sizes(field, top_level_dag_node)
+              if deferred is not None: deferred_info_ops.append(deferred)
+          else:
+            deferred=ApplyStencilRewriter.look_up_deferred_array_sizes(write_var, top_level_dag_node)
             if deferred is not None: deferred_info_ops.append(deferred)
-
-          deferred=ApplyStencilRewriter.look_up_deferred_array_sizes(write_var, top_level_dag_node)
-          if deferred is not None: deferred_info_ops.append(deferred)
 
           # For now assume only one result per stencil, hence use same stencil read_vars as input_fields to stencil result
           stencil_result=psy_stencil.PsyStencil_Result.build(attributes={"out_field": assign_op.lhs.blocks[0].ops.first.var,
@@ -447,6 +454,7 @@ class ApplyStencilRewriter(RewritePattern):
           return None, None, None
 
     def look_up_deferred_array_sizes(field, top_level):
+      print(f"{field.var_name.data}")
       if isinstance(field.type, psy_ir.ArrayType):
         needs_shape_inference=0
         for el in field.type.shape.data:
@@ -457,9 +465,10 @@ class ApplyStencilRewriter(RewritePattern):
         if needs_shape_inference > 0:
           # Infer size in each dimension for array
           vt=GetAllocateSizes(field.var_name.data, top_level)
+          print(f"vt={vt}")
           vt.traverse(top_level)
           # Ensure we have sizes for each dimension
-          assert len(vt.sizes) == len(field.type.shape.data)
+          assert len(vt.sizes) == len(field.type.shape.data), f"{field.var_name.data} len(vt.sizes)={len(vt.sizes)} len(field.type.shape.data)={len(field.type.shape.data)}\n"
           target_shape=[]
           for s in vt.sizes:
             target_shape+=[IntegerAttr(1, 32),IntegerAttr(s, 32)]
@@ -476,6 +485,9 @@ class ApplyStencilRewriter(RewritePattern):
         unique_written_vars={}
         for index, written_var in visitor.ordered_writes.items():
           unique_var_idx=unique_written_vars.get(written_var, 0)
+
+          print(f"{unique_var_idx} {index} {written_var}")
+          
           top_loop, assignment_op, stencil_op=self.handle_stencil_for_target(visitor, index, written_var, for_loop, rewriter, unique_var_idx)
           # We are tracking the unique variable index here, which is the instance of this specific target variable name. However,
           # if there is a replacement with a stencil, then we do not increment as that origional assignment is removed so it won't

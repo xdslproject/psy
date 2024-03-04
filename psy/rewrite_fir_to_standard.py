@@ -19,8 +19,8 @@ class RewriteFirConvert(RewritePattern):
   """
   @op_type_rewrite_pattern
   def match_and_rewrite(self, op: fir.Convert, rewriter: PatternRewriter, /):
-    in_type=op.value.typ
-    out_type=op.results[0].typ
+    in_type=op.value.type
+    out_type=op.results[0].type
     new_conv=None
     if isinstance(in_type, builtin.Float32Type) and isinstance(out_type,
       builtin.Float64Type) or isinstance(in_type, builtin.Float16Type) and isinstance(out_type,
