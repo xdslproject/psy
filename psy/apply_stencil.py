@@ -331,15 +331,12 @@ class ApplyStencilRewriter(RewritePattern):
           read_vars.append(read_var_v.var)
 
           if isinstance(read_var_v, psy_ir.ArrayReference):
-            print(f"{read_var_name}:{type(read_var_v)} {read_var_v.accessors.blocks[0].ops}")
             for idx in read_var_v.accessors.blocks[0].ops:
               v2=CollectArrayVariableIndexes()
-              print(f"{idx}")
               v2.traverse(idx)
-              print(f"{read_var_name}{v2.array_indexes}")
               access_variables.extend(v2.array_indexes)
 
-        if len(access_variables) == 0: return None, None, None
+        #if len(access_variables) == 0: return None, None, None
 
         written_var=visitor.written_variables[target_var_name][unique_var_idx]
 
@@ -454,7 +451,6 @@ class ApplyStencilRewriter(RewritePattern):
           return None, None, None
 
     def look_up_deferred_array_sizes(field, top_level):
-      print(f"{field.var_name.data}")
       if isinstance(field.type, psy_ir.ArrayType):
         needs_shape_inference=0
         for el in field.type.shape.data:
@@ -465,10 +461,9 @@ class ApplyStencilRewriter(RewritePattern):
         if needs_shape_inference > 0:
           # Infer size in each dimension for array
           vt=GetAllocateSizes(field.var_name.data, top_level)
-          print(f"vt={vt}")
           vt.traverse(top_level)
           # Ensure we have sizes for each dimension
-          assert len(vt.sizes) == len(field.type.shape.data), f"{field.var_name.data} len(vt.sizes)={len(vt.sizes)} len(field.type.shape.data)={len(field.type.shape.data)}\n"
+          assert len(vt.sizes) == len(field.type.shape.data)
           target_shape=[]
           for s in vt.sizes:
             target_shape+=[IntegerAttr(1, 32),IntegerAttr(s, 32)]
@@ -486,8 +481,6 @@ class ApplyStencilRewriter(RewritePattern):
         for index, written_var in visitor.ordered_writes.items():
           unique_var_idx=unique_written_vars.get(written_var, 0)
 
-          print(f"{unique_var_idx} {index} {written_var}")
-          
           top_loop, assignment_op, stencil_op=self.handle_stencil_for_target(visitor, index, written_var, for_loop, rewriter, unique_var_idx)
           # We are tracking the unique variable index here, which is the instance of this specific target variable name. However,
           # if there is a replacement with a stencil, then we do not increment as that origional assignment is removed so it won't
