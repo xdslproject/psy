@@ -327,14 +327,14 @@ class ConnectExternalLoadToFunctionInput(RewritePattern):
 
     func_arg=self.get_parent_arg(num_prev_external_loads, op.parent)
 
-    undef_memref_struct=llvm.LLVMMLIRUndef.create(result_types=[struct_type])
-    insert_alloc_ptr_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i64, [0])},
+    undef_memref_struct=llvm.UndefOp.create(result_types=[struct_type])
+    insert_alloc_ptr_op=llvm.InsertValueOp.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i64, [0])},
       operands=[undef_memref_struct.results[0], func_arg], result_types=[struct_type])
-    insert_aligned_ptr_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i64, [1])},
+    insert_aligned_ptr_op=llvm.InsertValueOp.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i64, [1])},
       operands=[insert_alloc_ptr_op.results[0], func_arg], result_types=[struct_type])
 
     offset_op=arith.Constant.from_int_and_width(0, 64)
-    insert_offset_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i64, [2])},
+    insert_offset_op=llvm.InsertValueOp.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i64, [2])},
       operands=[insert_aligned_ptr_op.results[0], offset_op.results[0]], result_types=[struct_type])
 
     ops_to_add=[undef_memref_struct, insert_alloc_ptr_op, insert_aligned_ptr_op, offset_op, insert_offset_op]
@@ -342,12 +342,12 @@ class ConnectExternalLoadToFunctionInput(RewritePattern):
     for dim in range(number_dims):
       dim_size=ConnectExternalLoadToFunctionInput.get_array_dimension_size(array_type, dim)
       size_op=arith.Constant.from_int_and_width(dim_size, 64)
-      insert_size_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i64, [3, dim])},
+      insert_size_op=llvm.InsertValueOp.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i64, [3, dim])},
         operands=[ops_to_add[-1].results[0], size_op.results[0]], result_types=[struct_type])
 
       # One for dimension stride
       stride_op=arith.Constant.from_int_and_width(1, 64)
-      insert_stride_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i64, [4, dim])},
+      insert_stride_op=llvm.InsertValueOp.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i64, [4, dim])},
         operands=[insert_size_op.results[0], stride_op.results[0]], result_types=[struct_type])
 
       ops_to_add+=[size_op, insert_size_op, stride_op, insert_stride_op]
