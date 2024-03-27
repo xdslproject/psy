@@ -562,7 +562,7 @@ class Range(IRDLOperation):
             stop: List[Operation],
             step: List[Operation],
             verify_op: bool = True) -> CallExpr:
-        res = Range.build(regions=[Region(Block(flatten(start))), Region(Block(flatten(stop))),
+        res = Range.build(regions=[Region(Block(flatten([start]))), Region(Block(flatten([stop]))),
                 Region(Block(flatten(step)))])
         if verify_op:
             # We don't verify nested operations since they might have already been verified

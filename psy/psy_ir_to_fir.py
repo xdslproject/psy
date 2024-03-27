@@ -318,7 +318,7 @@ def define_derived_var(ctx: SSAValueCtx,
     assert isinstance(var_def.var.type, psy_ir.DerivedType)
     type_name=var_def.var.type.type.data
     if type_name == "mpi_request":
-      constant=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(1, 32)}, result_types=[i32])
+      constant=arith.Constant.createarith.Constant.create(properties={"value": IntegerAttr.from_int_and_width(1, 32)}, result_types=[i32])
       mpi_request_alloc=mpi.AllocateTypeOp(mpi.RequestType, constant.results[0], var_name)
       ctx[var_name.data] = mpi_request_alloc.results[0]
       return [constant, mpi_request_alloc]
@@ -348,7 +348,7 @@ def define_array_var(ctx: SSAValueCtx,
       type_name=var_def.var.type.element_type.type.data
       if type_name == "mpi_request":
         sizes=get_array_sizes(var_def.var.type)
-        constant=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(sizes[0], 32)}, result_types=[i32])
+        constant=arith.Constant.create(properties={"value": IntegerAttr.from_int_and_width(sizes[0], 32)}, result_types=[i32])
         mpi_request_alloc=mpi.AllocateTypeOp.get(mpi.RequestType, constant.results[0], var_name)
         ctx[var_name.data] = mpi_request_alloc.results[0]
         return [constant, mpi_request_alloc]
@@ -363,7 +363,7 @@ def define_array_var(ctx: SSAValueCtx,
         heap_type=fir.HeapType([type])
         type=fir.BoxType([heap_type])
         zero_bits=fir.ZeroBits.create(result_types=[heap_type])
-        zero_val=arith.Constant.create(attributes={"value": IntegerAttr.from_index_int_value(0)},
+        zero_val=arith.Constant.create(properties={"value": IntegerAttr.from_index_int_value(0)},
                                            result_types=[IndexType()])
         shape_ops=[]
         for i in range(num_deferred):
@@ -400,6 +400,7 @@ def translate_var_def(ctx: SSAValueCtx,
       return define_array_var(ctx, var_def, program_state)
     elif isinstance(var_def.var.type, psy_ir.DerivedType):
       return define_derived_var(ctx, var_def, program_state)
+      
 
 def try_translate_type(op: Operation) -> Optional[Attribute]:
     """Tries to translate op as a type, returns None otherwise."""
@@ -916,9 +917,9 @@ def translate_print_intrinsic_call_expr(ctx: SSAValueCtx,
 
     # Start the IO session
     filename_str_op=generate_string_literal("./dummy.F90", program_state)
-    arg1=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(-1, 32)}, result_types=[i32])
+    arg1=arith.Constant.create(properties={"value": IntegerAttr.from_int_and_width(-1, 32)}, result_types=[i32])
     arg2=fir.Convert.create(operands=[filename_str_op.results[0]], result_types=[fir.ReferenceType([IntegerType(8)])])
-    arg3=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(3, 32)}, result_types=[i32])
+    arg3=arith.Constant.create(properties={"value": IntegerAttr.from_int_and_width(3, 32)}, result_types=[i32])
 
     call1=fir.Call.create(attributes={"callee": SymbolRefAttr("_FortranAioBeginExternalListOutput")}, operands=[arg1.results[0],
       arg2.results[0], arg3.results[0]], result_types=[fir.ReferenceType([IntegerType(8)])])
@@ -982,7 +983,7 @@ def generatePrintForString(program_state, op, arg, init_call_ssa):
     from_num=arg.type.type.from_index.data
     to_num=arg.type.type.to_index.data
     string_length=((to_num-from_num)+1)
-    str_len=arith.Constant.create(attributes={"value": IntegerAttr.from_index_int_value(string_length)}, result_types=[IndexType()])
+    str_len=arith.Constant.create(properties={"value": IntegerAttr.from_index_int_value(string_length)}, result_types=[IndexType()])
     arg2_2=fir.Convert.create(operands=[arg], result_types=[fir.ReferenceType([IntegerType(8)])])
     arg3_2=fir.Convert.create(operands=[str_len.results[0]], result_types=[i64])
     print_call=fir.Call.create(attributes={"callee": SymbolRefAttr("_FortranAioOutputAscii")}, operands=[init_call_ssa,
@@ -1015,7 +1016,7 @@ def translate_deallocate_intrinsic_call_expr(ctx: SSAValueCtx,
 
     freemem_op=fir.Freemem.create(operands=[arg])
     zero_bits_op=fir.ZeroBits.create(result_types=[heap_type])
-    zero_val_op=arith.Constant.create(attributes={"value": IntegerAttr.from_index_int_value(0)},
+    zero_val_op=arith.Constant.create(properties={"value": IntegerAttr.from_index_int_value(0)},
                                          result_types=[IndexType()])
     shape_operands=[]
     for i in range(num_deferred):
@@ -1103,7 +1104,7 @@ def translate_user_call_expr(ctx: SSAValueCtx,
             # uses assumed sizes for the size of the array
             array_type=get_nested_type(type_to_reference, fir.SequenceType)
             val=array_type.shape.data[0].value.data
-            constant_op=arith.Constant.create(attributes={"value": IntegerAttr.from_index_int_value(val)}, result_types=[IndexType()])
+            constant_op=arith.Constant.create(properties={"value": IntegerAttr.from_index_int_value(val)}, result_types=[IndexType()])
             shape_op=fir.Shape.create(operands=[constant_op.results[0]], result_types=[fir.ShapeType([IntAttr(1)])])
             embox_op=fir.Embox.build(operands=[arg, shape_op.results[0], [], [], []], regions=[[]], result_types=[fir.BoxType([array_type])])
             convert_op=fir.Convert.create(operands=[embox_op.results[0]], result_types=[fn_info.args[index]])
@@ -1207,8 +1208,11 @@ def try_translate_expr(
       return translate_psy_stencil_access(ctx, op, program_state)
     if isinstance(op, psy_stencil.PsyStencil_IntermediateAccess):
       return translate_psy_stencil_intermediate_access(ctx, op, program_state)
-    if isinstance(op, psy_ir.Range):
-      return translate_range(ctx, op, program_state)
+    # *** TODO: The Range ops within a function call ArrayReference are handled
+    # in ArrayReference - raw Range handling may be required, which will mean
+    # reinstating the case here and completing 'translate_range'
+    # if isinstance(op, psy_ir.Range):
+    #  return translate_range(ctx, op, program_state)
 
     assert False, "Unknown Expression"
 
@@ -1244,7 +1248,7 @@ def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, 
     boxdims_ops=[]
     ops_to_add=[]
     for i in range(array_type.getNumberDims()):
-      dim_constant_op=arith.Constant.create(attributes={"value": IntegerAttr.from_index_int_value(i)}, result_types=[IndexType()])
+      dim_constant_op=arith.Constant.create(properties={"value": IntegerAttr.from_index_int_value(i)}, result_types=[IndexType()])
       box_addr_op=fir.BoxDims.create(operands=[load_op.results[0], dim_constant_op.results[0]], result_types=[IndexType(), IndexType(), IndexType()])
       boxdims_ops.append(box_addr_op)
       ops_to_add+=[dim_constant_op, box_addr_op]
@@ -1261,8 +1265,15 @@ def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, 
 
     arg_ssa_list=[]
     for idx, accessor in enumerate(op.accessors.blocks[0].ops):
-      expr, ssa=try_translate_expr(ctx, accessor, program_state)
-      expressions.extend(expr)
+      # The array reference within a function call wraps the arguments in a range, so handle here
+      if isinstance(accessor, psy_ir.Range):
+        # The range has a start and stop but we are just interested in the stop (the start is the arg count)
+        for idx2, accessor2 in enumerate(accessor.stop.blocks[0].ops):
+          expr, ssa=try_translate_expr(ctx, accessor2, program_state)
+          expressions.extend(expr)        
+      else:
+        expr, ssa=try_translate_expr(ctx, accessor, program_state)
+        expressions.extend(expr)
 
       index_conv=perform_data_conversion_if_needed(ssa, boxdims_ops[idx].results[0].type)
       if index_conv is not None:
@@ -1299,7 +1310,7 @@ def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, 
       expr, ssa=try_translate_expr(ctx, accessor, program_state)
       expressions.extend(expr)
 
-      subtraction_index=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(1, 64)},
+      subtraction_index=arith.Constant.create(properties={"value": IntegerAttr.from_int_and_width(1, 64)},
                                           result_types=[i64])
       expressions.append(subtraction_index)
 
@@ -1382,7 +1393,7 @@ def translate_unary_expr(ctx: SSAValueCtx,
   assert isinstance(attr, Attribute)
 
   if (attr.data == "NOT"):
-    constant_true=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(1, 1)},
+    constant_true=arith.Constant.create(properties={"value": IntegerAttr.from_int_and_width(1, 1)},
                                          result_types=[IntegerType(1)])
     xori=arith.XOrI(expr_ssa_value, constant_true.results[0])
 
@@ -1407,7 +1418,7 @@ def translate_unary_expr(ctx: SSAValueCtx,
       negf_op=arith.Negf(expr_ssa_value)
       return expr + [negf_op], negf_op.results[0]
     elif isinstance(expr_ssa_value.type, IntegerType):
-      constant_op=arith.Constant.create(attributes={"value": IntegerAttr(0, expr_ssa_value.type)}, result_types=[expr_ssa_value.type])
+      constant_op=arith.Constant.create(properties={"value": IntegerAttr(0, expr_ssa_value.type)}, result_types=[expr_ssa_value.type])
       sub_op=arith.Subi(constant_op, expr_ssa_value)
       return expr + [constant_op, sub_op], sub_op.results[0]
     else:
@@ -1526,11 +1537,12 @@ def translate_literal(op: psy_ir.Literal, program_state : ProgramState) -> Opera
     value = op.attributes["value"]
 
     if isinstance(value, IntegerAttr):
-        return arith.Constant.create(attributes={"value": value},
+        return arith.Constant.create(properties={"value": value},
                                          result_types=[value.type])
+        #return arith.Constant.from_int_and_width(value.value,value.type)
 
     if isinstance(value, psy_ir.FloatAttr):
-        return arith.Constant.create(attributes={"value": value},
+        return arith.Constant.create(properties={"value": value},
                                          result_types=[value.type])
 
     if isinstance(value, StringAttr):
@@ -1551,3 +1563,48 @@ def generate_string_literal(string, program_state : ProgramState) -> Operation:
     ref_type=fir.ReferenceType([typ])
     addr_lookup=fir.AddressOf.create(attributes={"symbol": SymbolRefAttr("_QQcl."+str_uuid)}, result_types=[ref_type])
     return addr_lookup
+
+# *** TODO: Fix and use above or remove
+def translate_range(ctx: SSAValueCtx, range_op: psy_ir.Range, program_state : ProgramState) -> List[Operation]:
+    #cond, cond_name = translate_expr(ctx, if_stmt.cond.blocks[0].ops.first, program_state)
+
+    # start, stop and step
+    ops: List[Operation] = []
+    for op in range_op.start.blocks[0].ops:
+        if isinstance(op, psy_ir.Literal):
+          stmt_ops = translate_literal(op, program_state)
+        else:
+          stmt_ops = translate_expr(ctx, op, program_state)          
+        #ops += stmt_ops
+        ops.append(stmt_ops)
+    ops.append(fir.Result.create())
+    start = Region([Block(ops)])
+
+    ops: List[Operation] = []
+    for op in range_op.stop.blocks[0].ops:
+        if isinstance(op, psy_ir.Literal):
+          stmt_ops = translate_literal(op, program_state)
+        else:
+          stmt_ops = translate_expr(ctx, op, program_state)  
+        #ops += stmt_ops
+        ops.append(stmt_ops)
+        print(".")
+        
+    ops.append(fir.Result.create())
+    #stop = Region(Block(ops))
+
+    ops: List[Operation] = []
+    for op in range_op.step.blocks[0].ops:
+        if isinstance(op, psy_ir.Literal):
+          stmt_ops = translate_literal(op, program_state)
+        else:
+          stmt_ops = translate_expr(ctx, op, program_state)  
+        #ops += stmt_ops
+        ops.append(stmt_ops)   
+             
+    ops.append(fir.Result.create())
+    #step = Region([Block(ops)])
+
+    #new_op = fir.If.create(operands=[cond_name], regions=[then, orelse])
+    return [None] #[ops]
+    
