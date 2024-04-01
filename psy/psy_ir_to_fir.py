@@ -194,12 +194,12 @@ def translate_fun_def(ctx: SSAValueCtx,
         # NOTE: The name needs to be a compound of the capitalised module name and "Translator"
         modules[module_name] = importlib.import_module(f"psy.translators.{module_name.capitalize()}Translator")
         translator = getattr(modules[module_name], f"{module_name.capitalize()}Translator")
-        
+
         program_state.addModuleTranslator(translator())
         fn_names = program_state.getModuleTranslator(module_name).exports()
 
         for fn in fn_names:
-          program_state.addImport(module_name, fn) 
+          program_state.addImport(module_name, fn)
 
 
     # Add this function to program state imports
@@ -400,7 +400,7 @@ def translate_var_def(ctx: SSAValueCtx,
       return define_array_var(ctx, var_def, program_state)
     elif isinstance(var_def.var.type, psy_ir.DerivedType):
       return define_derived_var(ctx, var_def, program_state)
-      
+
 
 def try_translate_type(op: Operation) -> Optional[Attribute]:
     """Tries to translate op as a type, returns None otherwise."""
@@ -570,7 +570,7 @@ def translate_psy_stencil_result(ctx: SSAValueCtx, stencil_result: Operation, pr
 
   assert False
 
-  
+
 
 def translate_psy_stencil_stencil(ctx: SSAValueCtx, stencil_stmt: Operation, program_state : ProgramState) -> List[Operation]:
   ops: List[Operation] = []
@@ -878,7 +878,7 @@ def translate_call_expr_stmt(ctx: SSAValueCtx,
     # Lookup the function call in the loaded modules
     if call_expr.func.data.lower() in program_state.imports:
       return translate_module_call_expr(ctx, call_expr, program_state, is_expr)
-    
+
     if call_expr.attributes["intrinsic"].data:
       return translate_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
     else:
@@ -888,7 +888,7 @@ def translate_call_expr_stmt(ctx: SSAValueCtx,
 def translate_module_call_expr(ctx: SSAValueCtx,
                              call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
     function_name=call_expr.attributes["func"].data.lower()
-    
+
     # *** TODO: Add in the call to modules e.g. MPI here
     if program_state.hasImport(function_name):
       #return program_state.getModuleTranslator(fn_name=intrinsic_name).translate ...
@@ -1270,7 +1270,7 @@ def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, 
         # The range has a start and stop but we are just interested in the stop (the start is the arg count)
         for idx2, accessor2 in enumerate(accessor.stop.blocks[0].ops):
           expr, ssa=try_translate_expr(ctx, accessor2, program_state)
-          expressions.extend(expr)        
+          expressions.extend(expr)
       else:
         expr, ssa=try_translate_expr(ctx, accessor, program_state)
         expressions.extend(expr)
@@ -1574,7 +1574,7 @@ def translate_range(ctx: SSAValueCtx, range_op: psy_ir.Range, program_state : Pr
         if isinstance(op, psy_ir.Literal):
           stmt_ops = translate_literal(op, program_state)
         else:
-          stmt_ops = translate_expr(ctx, op, program_state)          
+          stmt_ops = translate_expr(ctx, op, program_state)
         #ops += stmt_ops
         ops.append(stmt_ops)
     ops.append(fir.Result.create())
@@ -1585,11 +1585,11 @@ def translate_range(ctx: SSAValueCtx, range_op: psy_ir.Range, program_state : Pr
         if isinstance(op, psy_ir.Literal):
           stmt_ops = translate_literal(op, program_state)
         else:
-          stmt_ops = translate_expr(ctx, op, program_state)  
+          stmt_ops = translate_expr(ctx, op, program_state)
         #ops += stmt_ops
         ops.append(stmt_ops)
         print(".")
-        
+
     ops.append(fir.Result.create())
     #stop = Region(Block(ops))
 
@@ -1598,13 +1598,13 @@ def translate_range(ctx: SSAValueCtx, range_op: psy_ir.Range, program_state : Pr
         if isinstance(op, psy_ir.Literal):
           stmt_ops = translate_literal(op, program_state)
         else:
-          stmt_ops = translate_expr(ctx, op, program_state)  
+          stmt_ops = translate_expr(ctx, op, program_state)
         #ops += stmt_ops
-        ops.append(stmt_ops)   
-             
+        ops.append(stmt_ops)
+
     ops.append(fir.Result.create())
     #step = Region([Block(ops)])
 
     #new_op = fir.If.create(operands=[cond_name], regions=[then, orelse])
     return [None] #[ops]
-    
+
