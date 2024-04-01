@@ -443,11 +443,11 @@ class ApplyStencilRewriter(RewritePattern):
 
           top_level_dag_node=ApplyStencilRewriter.get_dag_top_level(for_loop)
 
-          if len(read_vars) > 1:
-            for field in read_vars:
-              deferred=ApplyStencilRewriter.look_up_deferred_array_sizes(field, top_level_dag_node)
-              if deferred is not None: deferred_info_ops.append(deferred)
-          else:
+          for field in read_vars:
+            deferred=ApplyStencilRewriter.look_up_deferred_array_sizes(field, top_level_dag_node)
+            if deferred is not None: deferred_info_ops.append(deferred)
+
+          if write_var not in read_vars:
             deferred=ApplyStencilRewriter.look_up_deferred_array_sizes(write_var, top_level_dag_node)
             if deferred is not None: deferred_info_ops.append(deferred)
 
@@ -552,10 +552,20 @@ class MergeApplicableStencils(RewritePattern):
         if not MergeApplicableStencils.check_is_equals(target_stencil.min_relative_offset.data, stencil_op.min_relative_offset.data): return
         if not MergeApplicableStencils.check_is_equals(target_stencil.max_relative_offset.data, stencil_op.max_relative_offset.data): return
         deferred_array_info_ops=[]
+        existing_deferred_array_stmts={}
         stencil_result_ops=[]
         for op in itertools.chain(target_stencil.body.ops, stencil_op.body.ops):
           if isinstance(op, psy_stencil.PsyStencil_DeferredArrayInfo):
-            deferred_array_info_ops.append(op)
+            if op.var.var_name.data in existing_deferred_array_stmts.keys():
+              # If this has already been added as a deferred statement then check that the size
+              # of what has been added is what was intended to be added
+              assert len(op.shape) == len(existing_deferred_array_stmts[op.var.var_name.data].shape)
+              for m1, m2 in zip(op.shape, existing_deferred_array_stmts[op.var.var_name.data].shape):
+                assert m1.type == m2.type
+                assert m1.value == m2.value
+            else:
+              deferred_array_info_ops.append(op)
+              existing_deferred_array_stmts[op.var.var_name.data]=op
           elif isinstance(op, psy_stencil.PsyStencil_Result):
             stencil_result_ops.append(op)
           else:
