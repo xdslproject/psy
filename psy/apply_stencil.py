@@ -234,9 +234,9 @@ class RemoveEmptyLoops(RewritePattern):
   @op_type_rewrite_pattern
   def match_and_rewrite(
             self, for_loop: psy_ir.Loop, rewriter: PatternRewriter):
-      #if len(for_loop.body.blocks[0].ops) == 0:
-      #  for_loop.detach()
-      pass
+      if len(for_loop.body.blocks[0].ops) == 0:
+        if for_loop.parent is not None:
+          for_loop.detach()
 
 class ReplaceStencilDimensionVarWithStencilIndex(RewritePattern):
   def __init__(self, loop_indicies):
