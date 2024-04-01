@@ -21,6 +21,8 @@ binary_arith_op_matching={"ADD": [arith.Addi, arith.Addf], "SUB":[arith.Subi, ar
 
 binary_arith_psy_to_arith_comparison_op={"EQ": "eq", "NE": "ne", "GT": "sgt", "LT": "slt", "GE": "sge", "LE": "sle"}
 
+unary_intrinsics=["NOT", "SQRT", "ABS", "MINUS"]
+
 str_to_mpi_operation={"max": mpi.MpiOp.MPI_MAX, "min": mpi.MpiOp.MPI_MIN, "sum": mpi.MpiOp.MPI_SUM, "prod": mpi.MpiOp.MPI_PROD,
   "land": mpi.MpiOp.MPI_LAND, "band": mpi.MpiOp.MPI_BAND, "lor": mpi.MpiOp.MPI_LOR, "bor": mpi.MpiOp.MPI_BOR,
   "lxor": mpi.MpiOp.MPI_LXOR, "bxor": mpi.MpiOp.MPI_BXOR, "minloc": mpi.MpiOp.MPI_MINLOC,
@@ -906,6 +908,10 @@ def translate_intrinsic_call_expr(ctx: SSAValueCtx,
       return translate_deallocate_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
     elif intrinsic_name.lower() == "print":
       return translate_print_intrinsic_call_expr(ctx, call_expr, program_state, is_expr)
+    elif intrinsic_name.upper() in binary_arith_op_matching.keys():
+      return translate_binary_expr_from_args(ctx, intrinsic_name.upper(), call_expr.args.blocks[0].ops.first, call_expr.args.blocks[0].ops.last, program_state)[0]
+    elif intrinsic_name.upper() in unary_intrinsics:
+      return translate_unary_expr_args(ctx, intrinsic_name.upper(), call_expr.args.blocks[0].ops.first, program_state)[0]
     else:
       raise Exception(f"Could not translate intrinsic`{intrinsic_name}' as unknown")
 
@@ -1378,32 +1384,36 @@ def translate_nary_expr(ctx: SSAValueCtx,
   else:
     raise Exception(f"Nary operation '{attr.data}' not supported")
 
-
 def translate_unary_expr(ctx: SSAValueCtx,
         unary_expr: psy_ir.UnaryOperation, program_state : ProgramState) -> Tuple[List[Operation], SSAValue]:
 
-  expr, expr_ssa_value = translate_expr(ctx, unary_expr.expr.blocks[0].ops.first, program_state)
+  attr = unary_expr.op
+  assert isinstance(attr, Attribute)
+
+  return translate_unary_expr_args(ctx, attr.data, unary_expr.expr.blocks[0].ops.first, program_state)
+
+def translate_unary_expr_args(ctx: SSAValueCtx, operation: str,
+        unary_expr, program_state : ProgramState) -> Tuple[List[Operation], SSAValue]:
+
+  expr, expr_ssa_value = translate_expr(ctx, unary_expr, program_state)
 
   if isinstance(expr_ssa_value.type, fir.ReferenceType):
     load_op=fir.Load.create(operands=[expr_ssa_value], result_types=[expr_ssa_value.type.type])
     expr.append(load_op)
     expr_ssa_value=load_op.results[0]
 
-  attr = unary_expr.op
-  assert isinstance(attr, Attribute)
-
-  if (attr.data == "NOT"):
+  if (operation == "NOT"):
     constant_true=arith.Constant.create(properties={"value": IntegerAttr.from_int_and_width(1, 1)},
                                          result_types=[IntegerType(1)])
     xori=arith.XOrI(expr_ssa_value, constant_true.results[0])
 
     return expr + [constant_true, xori], xori.results[0]
 
-  if (attr.data == "SQRT"):
+  if (operation == "SQRT"):
     sqrt_op=math.SqrtOp(expr_ssa_value)
     return expr + [sqrt_op], sqrt_op.results[0]
 
-  if (attr.data == "ABS"):
+  if (operation == "ABS"):
     if isinstance(expr_ssa_value.type, AnyFloat):
       abs_op=math.AbsFOp(expr_ssa_value)
       return expr + [abs_op], abs_op.results[0]
@@ -1413,7 +1423,7 @@ def translate_unary_expr(ctx: SSAValueCtx,
     else:
       raise Exception(f"Can only issue abs on int or float, but issued on {expr_ssa_value.type}")
 
-  if (attr.data == "MINUS"):
+  if (operation == "MINUS"):
     if isinstance(expr_ssa_value.type, AnyFloat):
       negf_op=arith.Negf(expr_ssa_value)
       return expr + [negf_op], negf_op.results[0]
@@ -1456,8 +1466,18 @@ def perform_data_conversion_if_needed(expr_ssa, conv_type):
 def translate_binary_expr(
         ctx: SSAValueCtx,
         binary_expr: psy_ir.BinaryOperation, program_state : ProgramState) -> Tuple[List[Operation], SSAValue]:
-    lhs, lhs_ssa_value = translate_expr(ctx, binary_expr.lhs.blocks[0].ops.first, program_state)
-    rhs, rhs_ssa_value = translate_expr(ctx, binary_expr.rhs.blocks[0].ops.first, program_state)
+
+    attr = binary_expr.op
+    assert isinstance(attr, Attribute)
+    return translate_binary_expr_from_args(ctx, binary_expr.op.data, binary_expr.lhs.blocks[0].ops.first,
+      binary_expr.rhs.blocks[0].ops.first, program_state)
+
+def translate_binary_expr_from_args(
+        ctx: SSAValueCtx,
+        operation:str, lhs_expr, rhs_expr, program_state : ProgramState) -> Tuple[List[Operation], SSAValue]:
+
+    lhs, lhs_ssa_value = translate_expr(ctx, lhs_expr, program_state)
+    rhs, rhs_ssa_value = translate_expr(ctx, rhs_expr, program_state)
     result_type = lhs_ssa_value.type
 
     if isinstance(lhs_ssa_value.type, fir.ReferenceType):
@@ -1481,12 +1501,7 @@ def translate_binary_expr(
       rhs.append(rhs_conv)
       rhs_ssa_value=rhs_conv.results[0]
 
-    #assert (lhs_ssa_value.type == rhs_ssa_value.type) or isinstance(lhs_ssa_value.type, fir.ReferenceType) or isinstance(rhs_ssa_value.type, fir.ReferenceType)
-
-    attr = binary_expr.op
-    assert isinstance(attr, Attribute)
-
-    fir_binary_expr=get_arith_instance(binary_expr.op.data, lhs_ssa_value, rhs_ssa_value, program_state)
+    fir_binary_expr=get_arith_instance(operation, lhs_ssa_value, rhs_ssa_value, program_state)
 
     return lhs + rhs + [fir_binary_expr], fir_binary_expr.results[0]
 
