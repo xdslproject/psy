@@ -475,8 +475,6 @@ class ApplyStencilRewriter(RewritePattern):
           vt=GetAllocateSizes(field.var_name.data, top_level)
           vt.traverse(top_level)
           # Ensure we have sizes for each dimension
-          print(len(vt.sizes))
-          print(len(field.type.shape.data))
           assert len(vt.sizes) == len(field.type.shape.data)
           target_shape=[]
           for s in vt.sizes:
