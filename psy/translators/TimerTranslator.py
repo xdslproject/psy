@@ -10,12 +10,12 @@ from psy.psy_ir_to_fir import translate_expr
 
 
 class TimerTranslator(Translator):
-  
+
     def __init__(self):
         super().__init__()
         self.setName('timer')
         self.setFnNames([ 'timer_init', 'timer_start', 'timer_stop', 'timer_report' ])
- 
+
 
     def translate(self, function_name: str, ctx: SSAValueCtx,
                                  call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
@@ -27,11 +27,11 @@ class TimerTranslator(Translator):
           return self.translate_timer_stop_function_call_expr(ctx, call_expr, program_state, is_expr)
         elif function_name.lower() == "timer_report":
           return self.translate_timer_report_function_call_expr(ctx, call_expr, program_state, is_expr)
-        
+
         # The function we were looking for isn't in the Timer module
         return None;
 
-        
+
     def translate_timer_report_function_call_expr(self, ctx: SSAValueCtx,
                                  call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
         program_state.insertExternalFunctionToGlobalState("_QMdl_timerPtimer_report", [], None)
@@ -39,7 +39,7 @@ class TimerTranslator(Translator):
         init_call=fir.Call.create(attributes={"callee": SymbolRefAttr("_QMdl_timerPtimer_report")}, operands=[], result_types=[])
 
         return [init_call]
-        
+
 
     def translate_timer_init_function_call_expr(self, ctx: SSAValueCtx,
                                  call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
@@ -48,7 +48,7 @@ class TimerTranslator(Translator):
         init_call=fir.Call.create(attributes={"callee": SymbolRefAttr("_QMdl_timerPtimer_init")}, operands=[], result_types=[])
 
         return [init_call]
-        
+
 
     def translate_timer_start_function_call_expr(self, ctx: SSAValueCtx,
                                  call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
@@ -66,7 +66,7 @@ class TimerTranslator(Translator):
         convert_op=fir.Convert.create(operands=[arg_desc], result_types=[deferred_char_type])
 
 
-        embox_to_found=arith.Constant.create(attributes={"value": IntegerAttr.from_index_int_value(arg_desc.type.type.to_index.data)}, result_types=[IndexType()])
+        embox_to_found=arith.Constant.create(properties={"value": IntegerAttr.from_index_int_value(arg_desc.type.type.to_index.data)}, result_types=[IndexType()])
 
         embox_op=emboxchar_op=fir.Emboxchar.create(operands=[convert_op.results[0], embox_to_found.results[0]], result_types=[fir.BoxCharType([fir.IntAttr(1)])])
 
@@ -79,7 +79,7 @@ class TimerTranslator(Translator):
           start_call.operands[1].type, start_call.operands[2].type], None)
 
         return op_ctrl+op_desc+[convert_op, embox_to_found, embox_op, absent_op, start_call]
-        
+
 
     def translate_timer_stop_function_call_expr(self, ctx: SSAValueCtx,
                                  call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:

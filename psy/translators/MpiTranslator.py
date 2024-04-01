@@ -7,13 +7,13 @@ from psy.dialects import psy_ir
 
 
 class MpiTranslator(Translator):
-  
+
     def __init__(self):
         super().__init__()
         self.setName('mpi')
-        self.setFnNames([ 'mpi_commrank', 'mpi_commsize', 'mpi_send', 'mpi_isend', 'mpi_recv', 'mpi_irecv', 'mpi_wait', 
+        self.setFnNames([ 'mpi_commrank', 'mpi_commsize', 'mpi_send', 'mpi_isend', 'mpi_recv', 'mpi_irecv', 'mpi_wait',
         'mpi_waitall', 'mpi_reduce', 'mpi_allreduce', 'mpi_bcast', 'mpi_init','mpi_finalize'])
- 
+
 
     def translate(self, function_name: str, ctx: SSAValueCtx,
                                  call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
@@ -42,7 +42,7 @@ class MpiTranslator(Translator):
         elif function_name.lower() == "mpi_init" or function_name.lower() == "mpi_finalize":
           program_state.setRequiresMPI(True)
           return []
-        
+
         # The function we were looking for isn't in the MPI module
         return None;
 
@@ -170,7 +170,7 @@ class MpiTranslator(Translator):
         if request_op is not None: to_return+=request_op
 
         if isinstance(request_arg.type, mpi.VectorType):
-          element_index=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(0, 32)},
+          element_index=arith.Constant.create(properties={"value": IntegerAttr.from_int_and_width(0, 32)},
                                              result_types=[i32])
           load_op=mpi.VectorGetOp(request_arg, element_index.results[0])
           wait_op=mpi.Wait(load_op.results[0])
@@ -226,7 +226,7 @@ class MpiTranslator(Translator):
           if request_op is not None: result_ops+=request_op
 
           if isinstance(request_arg.type, mpi.VectorType):
-            element_index=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(0, 32)},
+            element_index=arith.Constant.create(properties={"value": IntegerAttr.from_int_and_width(0, 32)},
                                              result_types=[i32])
             load_op=mpi.VectorGetOp(request_arg, element_index.results[0])
             mpi_send_op=mpi.Isend(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], target_arg, tag_arg, load_op.results[0])
@@ -268,7 +268,7 @@ class MpiTranslator(Translator):
           if request_op is not None: result_ops+=request_op
 
           if isinstance(request_arg.type, mpi.VectorType):
-            element_index=arith.Constant.create(attributes={"value": IntegerAttr.from_int_and_width(0, 32)},
+            element_index=arith.Constant.create(properties={"value": IntegerAttr.from_int_and_width(0, 32)},
                                              result_types=[i32])
             load_op=mpi.VectorGetOp(request_arg, element_index.results[0])
             mpi_recv_op=mpi.Irecv(convert_buffer.results[0], count_arg, get_mpi_dtype_op.results[0], source_arg, tag_arg, load_op.results[0])
