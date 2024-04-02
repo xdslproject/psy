@@ -58,10 +58,13 @@ class NamedType(ParametrizedAttribute):
     precision : ParameterDef[AnyOf([IntAttr, EmptyAttr])]
 
     def set_kind(self, kind):
-      self.parameters[1]=kind
+      # 'self' is a 'frozen' DataClass, so unable to updated parameters directly 
+      self.__dict__['parameters'] = (self.parameters[0], kind, self.parameters[2])
 
     def set_precision(self, precision):
-      self.parameters[2]=precision
+      # 'self' is a 'frozen' DataClass, so unable to updated parameters directly 
+      self.__dict__['parameters'] = (self.parameters[0], self.parameters[1], precision)
+
 
 @irdl_attr_definition
 class StructureMember(ParametrizedAttribute):
@@ -71,7 +74,7 @@ class StructureMember(ParametrizedAttribute):
   children : ParameterDef[AnyOf([AnyAttr(), EmptyAttr])]
 
 @irdl_attr_definition
-class EmptyToken(EmptyAttr):
+class EmptyToken(ParametrizedAttribute):
     name = "psy.ir.emptytoken"
 
 @irdl_attr_definition
@@ -559,7 +562,7 @@ class Range(IRDLOperation):
             stop: List[Operation],
             step: List[Operation],
             verify_op: bool = True) -> CallExpr:
-        res = Range.build(regions=[Region(Block(flatten(start))), Region(Block(flatten(stop))),
+        res = Range.build(regions=[Region(Block(flatten([start]))), Region(Block(flatten([stop]))),
                 Region(Block(flatten(step)))])
         if verify_op:
             # We don't verify nested operations since they might have already been verified

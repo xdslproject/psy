@@ -23,21 +23,29 @@ class GetAllocateSizes(Visitor):
     self.dag_top_level=dag_top_level
     self.sizes=[]
 
+  def get_range_size(self, val):
+    if isinstance(val, psy_ir.ExprName):
+      gvv=GetVariableValue(val.var.var_name.data, self.dag_top_level)
+      gvv.traverse(self.dag_top_level)
+      assert gvv.var_value is not None
+      return gvv.var_value
+    if isinstance(val, psy_ir.Literal):
+      return val.value.value.data
+    assert False
+
   def traverse_call_expr(self, call_expr: psy_ir.CallExpr):
     if call_expr.func.data.upper() == "ALLOCATE":
-      target_var=call_expr.args.blocks[0].ops.first
-      if target_var.var.var_name.data == self.var_name:
-        for index, node in enumerate(call_expr.args.blocks[0].ops):
-          if index == 0: continue
-          # Currently only allow variable or literal directly in allocate,
-          # i.e. dont support an expression such as `nx-4`
-          if isinstance(node, psy_ir.ExprName):
-            gvv=GetVariableValue(node.var.var_name.data, self.dag_top_level)
-            gvv.traverse(self.dag_top_level)
-            assert gvv.var_value is not None
-            self.sizes.append(gvv.var_value)
-          if isinstance(node, psy_ir.Literal):
-            self.sizes.append(node.value.value.data)
+      assert isinstance(call_expr.args.blocks[0].ops.first, psy_ir.ArrayReference)
+      array_ref=call_expr.args.blocks[0].ops.first
+      if array_ref.var.var_name.data == self.var_name:
+        for dim_size in array_ref.accessors.blocks[0].ops:
+          assert isinstance(dim_size, psy_ir.Range)
+            # Currently only allow variable or literal directly in allocate,
+            # i.e. dont support an expression such as `nx-4`
+          start=self.get_range_size(dim_size.start.block.first_op)
+          stop=self.get_range_size(dim_size.stop.block.first_op)
+          # Plus one as this is inclusive, i.e. from 1 to 10 is size 10
+          self.sizes.append((stop-start)+1)
 
 class GetVariableValue(Visitor):
   def __init__(self, var_name, dag_top_level):
@@ -227,7 +235,8 @@ class RemoveEmptyLoops(RewritePattern):
   def match_and_rewrite(
             self, for_loop: psy_ir.Loop, rewriter: PatternRewriter):
       if len(for_loop.body.blocks[0].ops) == 0:
-        for_loop.detach()
+        if for_loop.parent is not None:
+          for_loop.detach()
 
 class ReplaceStencilDimensionVarWithStencilIndex(RewritePattern):
   def __init__(self, loop_indicies):
@@ -328,6 +337,7 @@ class ApplyStencilRewriter(RewritePattern):
         for read_var_name in visitor.written_to_read[index]:
           read_var_v=visitor.read_variables[read_var_name]
           read_vars.append(read_var_v.var)
+
           if isinstance(read_var_v, psy_ir.ArrayReference):
             for idx in read_var_v.accessors.blocks[0].ops:
               v2=CollectArrayVariableIndexes()
@@ -338,7 +348,11 @@ class ApplyStencilRewriter(RewritePattern):
 
         written_var=visitor.written_variables[target_var_name][unique_var_idx]
 
-        # Needs to be an array that we are writing into
+        # Needs to be an array that we are writing into, if it's a scalar then ignore
+        if not isinstance(written_var, psy_ir.ArrayReference):
+          return None, None, None
+
+        # If we reach this stage then are writing into an array (which is what we want)
         assert isinstance(written_var, psy_ir.ArrayReference)
         index_variable_names=[]
         for idx in written_var.accessors.blocks[0].ops:
@@ -428,12 +442,14 @@ class ApplyStencilRewriter(RewritePattern):
           deferred_info_ops=[]
 
           top_level_dag_node=ApplyStencilRewriter.get_dag_top_level(for_loop)
+
           for field in read_vars:
             deferred=ApplyStencilRewriter.look_up_deferred_array_sizes(field, top_level_dag_node)
             if deferred is not None: deferred_info_ops.append(deferred)
 
-          deferred=ApplyStencilRewriter.look_up_deferred_array_sizes(write_var, top_level_dag_node)
-          if deferred is not None: deferred_info_ops.append(deferred)
+          if write_var not in read_vars:
+            deferred=ApplyStencilRewriter.look_up_deferred_array_sizes(write_var, top_level_dag_node)
+            if deferred is not None: deferred_info_ops.append(deferred)
 
           # For now assume only one result per stencil, hence use same stencil read_vars as input_fields to stencil result
           stencil_result=psy_stencil.PsyStencil_Result.build(attributes={"out_field": assign_op.lhs.blocks[0].ops.first.var,
@@ -476,6 +492,7 @@ class ApplyStencilRewriter(RewritePattern):
         unique_written_vars={}
         for index, written_var in visitor.ordered_writes.items():
           unique_var_idx=unique_written_vars.get(written_var, 0)
+
           top_loop, assignment_op, stencil_op=self.handle_stencil_for_target(visitor, index, written_var, for_loop, rewriter, unique_var_idx)
           # We are tracking the unique variable index here, which is the instance of this specific target variable name. However,
           # if there is a replacement with a stencil, then we do not increment as that origional assignment is removed so it won't
@@ -535,10 +552,20 @@ class MergeApplicableStencils(RewritePattern):
         if not MergeApplicableStencils.check_is_equals(target_stencil.min_relative_offset.data, stencil_op.min_relative_offset.data): return
         if not MergeApplicableStencils.check_is_equals(target_stencil.max_relative_offset.data, stencil_op.max_relative_offset.data): return
         deferred_array_info_ops=[]
+        existing_deferred_array_stmts={}
         stencil_result_ops=[]
         for op in itertools.chain(target_stencil.body.ops, stencil_op.body.ops):
           if isinstance(op, psy_stencil.PsyStencil_DeferredArrayInfo):
-            deferred_array_info_ops.append(op)
+            if op.var.var_name.data in existing_deferred_array_stmts.keys():
+              # If this has already been added as a deferred statement then check that the size
+              # of what has been added is what was intended to be added
+              assert len(op.shape) == len(existing_deferred_array_stmts[op.var.var_name.data].shape)
+              for m1, m2 in zip(op.shape, existing_deferred_array_stmts[op.var.var_name.data].shape):
+                assert m1.type == m2.type
+                assert m1.value == m2.value
+            else:
+              deferred_array_info_ops.append(op)
+              existing_deferred_array_stmts[op.var.var_name.data]=op
           elif isinstance(op, psy_stencil.PsyStencil_Result):
             stencil_result_ops.append(op)
           else:
@@ -620,7 +647,7 @@ class RewriteIntermediateResultAccesses(RewritePattern):
 
 
 
-@dataclass
+@dataclass(frozen=True)
 class ApplyStencilAnalysis(ModulePass):
   """
   This is the entry point for the transformation pass which will then apply the rewriter

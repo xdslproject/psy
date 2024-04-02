@@ -54,6 +54,7 @@ class PsyOptMain(xDSLOptMain):
         self.ctx.load_dialect(psyIR)
         self.ctx.load_dialect(psyStencil)
 
+
     @staticmethod
     def get_passes_as_dict() -> Dict[str, Callable[[MLContext, ModuleOp], None]]:
         """Add all passes that can be called by psy-opt in a dictionary."""
