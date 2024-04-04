@@ -877,6 +877,7 @@ def translate_assign(ctx: SSAValueCtx,
 def translate_call_expr_stmt(ctx: SSAValueCtx,
                              call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
 
+          
     # Lookup the function call in the loaded modules
     if call_expr.func.data.lower() in program_state.imports:
       return translate_module_call_expr(ctx, call_expr, program_state, is_expr)
