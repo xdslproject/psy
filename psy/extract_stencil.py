@@ -192,7 +192,7 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
       function_name="_InternalBridgeStencil_"+str(self.bridge_id)
       self.bridge_id+=1
 
-      call_stencil=fir.Call.create(attributes={"callee": builtin.SymbolRefAttr(function_name)}, operands=[el.results[0] for el in arg_ops], result_types=[])
+      call_stencil=fir.Call.create(properties={"callee": builtin.SymbolRefAttr(function_name)}, operands=[el.results[0] for el in arg_ops], result_types=[])
       parent.insert_ops_before(ops_to_add+[call_stencil], apply_stencil_op)
 
       for op in stencil_ops:

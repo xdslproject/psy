@@ -73,7 +73,7 @@ def apply_environment_to_module(module: ModuleOp):
 
     region_args=[zero_bits, has_value]
 
-    glob=fir.Global.create(attributes={"sym_name": StringAttr("_QQEnvironmentDefaults"),
+    glob=fir.Global.create(properties={"sym_name": StringAttr("_QQEnvironmentDefaults"),
                                       "symref": SymbolRefAttr("_QQEnvironmentDefaults"),
                                       "type": typ, "constant": UnitAttr()},
             regions=[Region([Block(region_args)])])
@@ -336,7 +336,7 @@ def define_scalar_var(ctx: SSAValueCtx,
     ref_type=fir.ReferenceType([type])
 
     # Operand segment sizes is wrong here, either hack it like trying (but doesn't match!) or understand why missing
-    fir_var_def = fir.Alloca.build(attributes={"bindc_name": var_name, "uniq_name": StringAttr(generateVariableUniqueName(program_state, var_name.data)),
+    fir_var_def = fir.Alloca.build(properties={"bindc_name": var_name, "uniq_name": StringAttr(generateVariableUniqueName(program_state, var_name.data)),
       "in_type":type}, operands=[[],[]], regions=[[]], result_types=[ref_type])
 
     # relate variable identifier and SSA value by adding it into the current context
@@ -375,14 +375,14 @@ def define_array_var(ctx: SSAValueCtx,
         has_val=fir.HasValue.create(operands=[embox.results[0]])
         region_args=[zero_bits, zero_val, shape, embox, has_val]
 
-        glob=fir.Global.create(attributes={"linkName": StringAttr("internal"), "sym_name": StringAttr("_QFE"+var_name.data), "symref": SymbolRefAttr("_QFE"+var_name.data), "type": type},
+        glob=fir.Global.create(properties={"linkName": StringAttr("internal"), "sym_name": StringAttr("_QFE"+var_name.data), "symref": SymbolRefAttr("_QFE"+var_name.data), "type": type},
             regions=[Region([Block(region_args)])])
-        addr_lookup=fir.AddressOf.create(attributes={"symbol": SymbolRefAttr("_QFE"+var_name.data)}, result_types=[fir.ReferenceType([type])])
+        addr_lookup=fir.AddressOf.create(properties={"symbol": SymbolRefAttr("_QFE"+var_name.data)}, result_types=[fir.ReferenceType([type])])
         program_state.appendToGlobal(glob)
         ctx[var_name.data] = addr_lookup.results[0]
         return [addr_lookup]
       else:
-        fir_var_def = fir.Alloca.build(attributes={"bindc_name": var_name, "uniq_name": StringAttr(generateVariableUniqueName(program_state, var_name.data)),
+        fir_var_def = fir.Alloca.build(properties={"bindc_name": var_name, "uniq_name": StringAttr(generateVariableUniqueName(program_state, var_name.data)),
           "in_type":type}, operands=[[],[]], regions=[[]], result_types=[fir.ReferenceType([type])])
         ctx[var_name.data] = fir_var_def.results[0]
         return [fir_var_def]
@@ -768,7 +768,7 @@ def translate_gpu_loop(ctx: SSAValueCtx, gpu_stmt: Operation, program_state : Pr
     pass # Need to add in ability to append GPU function here
 
   # Hacking in the "@" character on the GPU function name here
-  launch_fn=gpu.LaunchFuncOp.create(attributes={"kernel":SymbolRefAttr("gpu_fns.@gpu_fn_"+str(program_state.getNumGPUFns()))})
+  launch_fn=gpu.LaunchFuncOp.create(properties={"kernel":SymbolRefAttr("gpu_fns.@gpu_fn_"+str(program_state.getNumGPUFns()))})
   program_state.incrementNumGPUFns()
   return [launch_fn]
 
@@ -805,7 +805,7 @@ def translate_loop(ctx: SSAValueCtx,
     body=Region()
     body.add_block(block)
 
-    do_loop=fir.DoLoop.create(attributes={"finalValue": UnitAttr()},
+    do_loop=fir.DoLoop.create(properties={"finalValue": UnitAttr()},
     operands=[conv_start.results[0], conv_stop.results[0], conv_step.results[0], start_name], result_types=[IndexType(), i32], regions=[body])
     final_iterator_store=fir.Store.create(operands=[do_loop.results[1], iterator])
     return start+[conv_start]+stop+[conv_stop]+step+[conv_step, do_loop, final_iterator_store]
@@ -928,7 +928,7 @@ def translate_print_intrinsic_call_expr(ctx: SSAValueCtx,
     arg2=fir.Convert.create(operands=[filename_str_op.results[0]], result_types=[fir.ReferenceType([IntegerType(8)])])
     arg3=arith.Constant.create(properties={"value": IntegerAttr.from_int_and_width(3, 32)}, result_types=[i32])
 
-    call1=fir.Call.create(attributes={"callee": SymbolRefAttr("_FortranAioBeginExternalListOutput")}, operands=[arg1.results[0],
+    call1=fir.Call.create(properties={"callee": SymbolRefAttr("_FortranAioBeginExternalListOutput")}, operands=[arg1.results[0],
       arg2.results[0], arg3.results[0]], result_types=[fir.ReferenceType([IntegerType(8)])])
     arg_operands.extend([filename_str_op, arg1, arg2, arg3, call1])
 
@@ -956,7 +956,7 @@ def translate_print_intrinsic_call_expr(ctx: SSAValueCtx,
           arg_operands.extend(generatePrintForString(program_state, op[0], arg, call1.results[0]))
 
     # Close out the IO
-    call3=fir.Call.create(attributes={"callee": SymbolRefAttr("_FortranAioEndIoStatement")}, operands=[call1.results[0]],
+    call3=fir.Call.create(properties={"callee": SymbolRefAttr("_FortranAioEndIoStatement")}, operands=[call1.results[0]],
       result_types=[IntegerType(32)])
     arg_operands.extend([call3])
 
@@ -981,7 +981,7 @@ def generatePrintForIntegerOrFloat(program_state, op, arg, init_call_ssa):
         raise Exception(f"Could not translate float type`{arg.type}' as only 32 or 64 bit supported")
     else:
       raise Exception(f"Could not translate type`{arg.type}' for printing")
-    print_call=fir.Call.create(attributes={"callee": SymbolRefAttr(fn_name)}, operands=[init_call_ssa,
+    print_call=fir.Call.create(properties={"callee": SymbolRefAttr(fn_name)}, operands=[init_call_ssa,
           arg], result_types=[IntegerType(1)])
     program_state.insertExternalFunctionToGlobalState(fn_name, [init_call_ssa.type, arg.type], IntegerType(1))
     return [op, print_call]
@@ -993,7 +993,7 @@ def generatePrintForString(program_state, op, arg, init_call_ssa):
     str_len=arith.Constant.create(properties={"value": IntegerAttr.from_index_int_value(string_length)}, result_types=[IndexType()])
     arg2_2=fir.Convert.create(operands=[arg], result_types=[fir.ReferenceType([IntegerType(8)])])
     arg3_2=fir.Convert.create(operands=[str_len.results[0]], result_types=[i64])
-    print_call=fir.Call.create(attributes={"callee": SymbolRefAttr("_FortranAioOutputAscii")}, operands=[init_call_ssa,
+    print_call=fir.Call.create(properties={"callee": SymbolRefAttr("_FortranAioOutputAscii")}, operands=[init_call_ssa,
           arg2_2.results[0], arg3_2.results[0]], result_types=[IntegerType(1)])
     program_state.insertExternalFunctionToGlobalState("_FortranAioOutputAscii", [init_call_ssa.type,
         fir.ReferenceType([IntegerType(8)]), i64], IntegerType(1))
@@ -1056,7 +1056,7 @@ def translate_allocate_intrinsic_call_expr(ctx: SSAValueCtx,
     heap_type=get_nested_type(target_ssa.type, fir.HeapType)
     array_type=get_nested_type(target_ssa.type, fir.SequenceType)
 
-    allocmem_op=fir.Allocmem.build(attributes={"in_type":array_type, "uniq_name": StringAttr(var_name+".alloc")}, operands=[[], args], regions=[[]], result_types=[heap_type])
+    allocmem_op=fir.Allocmem.build(properties={"in_type":array_type, "uniq_name": StringAttr(var_name+".alloc")}, operands=[[], args], regions=[[]], result_types=[heap_type])
     shape_op=fir.Shape.create(operands=args, result_types=[fir.ShapeType([IntAttr(len(args))])])
     embox_op=fir.Embox.build(operands=[allocmem_op.results[0], shape_op.results[0], [], [], []], regions=[[]], result_types=[fir.BoxType([heap_type])])
     store_op=fir.Store.create(operands=[embox_op.results[0], target_ssa])
@@ -1100,7 +1100,7 @@ def translate_user_call_expr(ctx: SSAValueCtx,
             ops+=[convert_op]
             args.append(convert_op.results[0])
           else:
-            reference_creation=fir.Alloca.build(attributes={"in_type":arg.type, "valuebyref": UnitAttr()}, operands=[[],[]],
+            reference_creation=fir.Alloca.build(properties={"in_type":arg.type, "valuebyref": UnitAttr()}, operands=[[],[]],
                               regions=[[]], result_types=[fir.ReferenceType([type_to_reference])])
             store_op=fir.Store.create(operands=[arg, reference_creation.results[0]])
             ops+=[reference_creation, store_op]
@@ -1126,9 +1126,9 @@ def translate_user_call_expr(ctx: SSAValueCtx,
     # Need return type here for expression
     if is_expr:
       result_type=try_translate_type(call_expr.type)
-      call = fir.Call.create(attributes={"callee": SymbolRefAttr(fn_info.full_name)}, operands=args, result_types=[result_type])
+      call = fir.Call.create(properties={"callee": SymbolRefAttr(fn_info.full_name)}, operands=args, result_types=[result_type])
     else:
-      call = fir.Call.create(attributes={"callee": SymbolRefAttr(fn_info.full_name)}, operands=args, result_types=[])
+      call = fir.Call.create(properties={"callee": SymbolRefAttr(fn_info.full_name)}, operands=args, result_types=[])
     ops.append(call)
     return ops
 
@@ -1193,7 +1193,7 @@ def try_translate_expr(
       return [op], op.results[0]
 
     if isinstance(op, psy_stencil.PsyStencil_DimIndex):
-      stencil_index_op=stencil.IndexOp.build(attributes={"dim": IntegerAttr(op.index, 32), "offset": stencil.IndexAttr.get(0,0,0)}, result_types=[IndexType()])
+      stencil_index_op=stencil.IndexOp.build(properties={"dim": IntegerAttr(op.index, 32), "offset": stencil.IndexAttr.get(0,0,0)}, result_types=[IndexType()])
       target_type=try_translate_type(op.original_type)
       assert target_type is not None
       data_conv_op=perform_data_conversion_if_needed(stencil_index_op.results[0], target_type)
@@ -1343,7 +1343,7 @@ def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, 
 
     fir_type=try_translate_type(op.var.type)
 
-  coordinate_of=fir.CoordinateOf.create(attributes={"baseType": base_type}, operands=ssa_list, result_types=[fir.ReferenceType([fir_type.type])])
+  coordinate_of=fir.CoordinateOf.create(properties={"baseType": base_type}, operands=ssa_list, result_types=[fir.ReferenceType([fir_type.type])])
   expressions.append(coordinate_of)
   return expressions, coordinate_of.results[0]
 
@@ -1520,7 +1520,7 @@ def get_arith_instance(operation:str, lhs, rhs, program_state : ProgramState):
       elif (lhs.type == f64 or lhs.type == f32) and (rhs.type == i32):
         # Will call math.ipowi for integer, otherwise call into LLVM function directly
         call_name="llvm.powi."+str(lhs.type)+".i32"
-        fn_call_op=fir.Call.create(attributes={"callee": SymbolRefAttr(call_name)},
+        fn_call_op=fir.Call.create(properties={"callee": SymbolRefAttr(call_name)},
             operands=[lhs, rhs], result_types=[lhs.type])
         program_state.insertExternalFunctionToGlobalState(call_name, [lhs.type, rhs.type], lhs.type)
         return fn_call_op
@@ -1570,14 +1570,14 @@ def translate_literal(op: psy_ir.Literal, program_state : ProgramState) -> Opera
 def generate_string_literal(string, program_state : ProgramState) -> Operation:
     string_literal=string.replace("\"", "")
     typ=fir.CharacterType([fir.IntAttr(1), fir.IntAttr(len(string_literal))])
-    string_lit_op=fir.StringLit.create(attributes={"size": IntegerAttr.from_int_and_width(len(string_literal), 64), "value": StringAttr(string_literal)}, result_types=[typ])
+    string_lit_op=fir.StringLit.create(properties={"size": IntegerAttr.from_int_and_width(len(string_literal), 64), "value": StringAttr(string_literal)}, result_types=[typ])
     has_val_op=fir.HasValue.create(operands=[string_lit_op.results[0]])
     str_uuid=uuid.uuid4().hex.upper()
-    glob=fir.Global.create(attributes={"linkName": StringAttr("linkonce"), "sym_name": StringAttr("_QQcl."+str_uuid), "symref": SymbolRefAttr("_QQcl."+str_uuid), "type": typ},
+    glob=fir.Global.create(properties={"linkName": StringAttr("linkonce"), "sym_name": StringAttr("_QQcl."+str_uuid), "symref": SymbolRefAttr("_QQcl."+str_uuid), "type": typ},
       regions=[Region([Block([string_lit_op, has_val_op])])])
     program_state.appendToGlobal(glob)
     ref_type=fir.ReferenceType([typ])
-    addr_lookup=fir.AddressOf.create(attributes={"symbol": SymbolRefAttr("_QQcl."+str_uuid)}, result_types=[ref_type])
+    addr_lookup=fir.AddressOf.create(properties={"symbol": SymbolRefAttr("_QQcl."+str_uuid)}, result_types=[ref_type])
     return addr_lookup
 
 # *** TODO: Fix and use above or remove
