@@ -40,7 +40,7 @@ class _StencilExtractorRewriteBase(RewritePattern, ABC):
     input_types_translated=[]
     for typ in input_types:
       if isinstance(typ, fir.LLVMPointerType):
-        input_types_translated.append(llvm.LLVMPointerType.typed(typ.type))
+        input_types_translated.append(llvm.LLVMPointerType.opaque()) 
       else:
         input_types_translated.append(typ)
 
@@ -320,7 +320,7 @@ class ConnectExternalLoadToFunctionInput(RewritePattern):
     # be an LLVM pointer to this
     if not isinstance(ptr_type, llvm.LLVMPointerType):
       nt=ConnectExternalLoadToFunctionInput.get_nested_type(ptr_type, fir.SequenceType)
-      ptr_type=llvm.LLVMPointerType.typed(nt.type)
+      ptr_type=llvm.LLVMPointerType.opaque() 
 
     array_typ=llvm.LLVMArrayType.from_size_and_type(builtin.IntAttr(number_dims), builtin.i64)
     struct_type=llvm.LLVMStructType.from_type_list([ptr_type, ptr_type, builtin.i64, array_typ, array_typ])
@@ -354,7 +354,7 @@ class ConnectExternalLoadToFunctionInput(RewritePattern):
 
     #if isinstance(ptr_type, llvm.LLVMPointerType):
     shape_int = [i if isinstance(i, int) else i.value.data for i in ConnectExternalLoadToFunctionInput.get_c_style_array_shape(array_type)]
-    target_memref_type=MemRefType(ptr_type.type, shape_int)
+    target_memref_type=MemRefType(nt.type, shape_int) # Use the FIR type for the memref here
 
     unrealised_conv_cast_op=builtin.UnrealizedConversionCastOp.create(operands=[insert_stride_op.results[0]], result_types=[target_memref_type])
     ops_to_add.append(unrealised_conv_cast_op)

@@ -1570,7 +1570,7 @@ def translate_literal(op: psy_ir.Literal, program_state : ProgramState) -> Opera
 def generate_string_literal(string, program_state : ProgramState) -> Operation:
     string_literal=string.replace("\"", "")
     typ=fir.CharacterType([fir.IntAttr(1), fir.IntAttr(len(string_literal))])
-    string_lit_op=fir.StringLit.create(properties={"size": IntegerAttr.from_int_and_width(len(string_literal), 64), "value": StringAttr(string_literal)}, result_types=[typ])
+    string_lit_op=fir.StringLit.create(attributes={"size": IntegerAttr.from_int_and_width(len(string_literal), 64), "value": StringAttr(string_literal)}, result_types=[typ])
     has_val_op=fir.HasValue.create(operands=[string_lit_op.results[0]])
     str_uuid=uuid.uuid4().hex.upper()
     glob=fir.Global.create(properties={"linkName": StringAttr("linkonce"), "sym_name": StringAttr("_QQcl."+str_uuid), "symref": SymbolRefAttr("_QQcl."+str_uuid), "type": typ},
