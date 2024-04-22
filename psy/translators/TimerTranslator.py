@@ -36,7 +36,7 @@ class TimerTranslator(Translator):
                                  call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
         program_state.insertExternalFunctionToGlobalState("_QMdl_timerPtimer_report", [], None)
 
-        init_call=fir.Call.create(attributes={"callee": SymbolRefAttr("_QMdl_timerPtimer_report")}, operands=[], result_types=[])
+        init_call=fir.Call.create(properties={"callee": SymbolRefAttr("_QMdl_timerPtimer_report")}, operands=[], result_types=[])
 
         return [init_call]
 
@@ -45,7 +45,7 @@ class TimerTranslator(Translator):
                                  call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
         program_state.insertExternalFunctionToGlobalState("_QMdl_timerPtimer_init", [], None)
 
-        init_call=fir.Call.create(attributes={"callee": SymbolRefAttr("_QMdl_timerPtimer_init")}, operands=[], result_types=[])
+        init_call=fir.Call.create(properties={"callee": SymbolRefAttr("_QMdl_timerPtimer_init")}, operands=[], result_types=[])
 
         return [init_call]
 
@@ -72,7 +72,7 @@ class TimerTranslator(Translator):
 
         absent_op=fir.Absent.create(operands=[], result_types=[fir.ReferenceType([i64])])
 
-        start_call=fir.Call.create(attributes={"callee": SymbolRefAttr("_QMdl_timerPtimer_start")},
+        start_call=fir.Call.create(properties={"callee": SymbolRefAttr("_QMdl_timerPtimer_start")},
           operands=[arg_ctrl.owner.memref, embox_op.results[0], absent_op.results[0]], result_types=[])
 
         program_state.insertExternalFunctionToGlobalState("_QMdl_timerPtimer_start", [start_call.operands[0].type,
@@ -89,7 +89,7 @@ class TimerTranslator(Translator):
         assert isinstance(arg_ctrl.owner, fir.Load)
         assert arg_ctrl.owner.memref.type == fir.ReferenceType([i32])
 
-        stop_call=fir.Call.create(attributes={"callee": SymbolRefAttr("_QMdl_timerPtimer_stop")},
+        stop_call=fir.Call.create(properties={"callee": SymbolRefAttr("_QMdl_timerPtimer_stop")},
           operands=[arg_ctrl.owner.memref], result_types=[])
 
         program_state.insertExternalFunctionToGlobalState("_QMdl_timerPtimer_stop", [stop_call.operands[0].type], None)
