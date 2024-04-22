@@ -3,7 +3,7 @@ import importlib
 from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerType, ArrayAttr, i32, i64, f32, f64, f16, IndexType, DictionaryAttr, IntAttr,
       Float16Type, Float32Type, Float64Type, FloatAttr, UnitAttr, DenseIntOrFPElementsAttr, SymbolRefAttr, AnyFloat, TupleType, UnrealizedConversionCastOp)
 from xdsl.dialects import func, arith, cf, mpi #, gpu
-from xdsl.dialects.experimental import math, fir
+from xdsl.dialects.experimental import math, fir, hlfir
 from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext, BlockArgument
 from psy.dialects import psy_ir, psy_stencil #, hpc_gpu
 from psy.support import SSAValueCtx, ProgramState
@@ -336,13 +336,17 @@ def define_scalar_var(ctx: SSAValueCtx,
 
     ref_type=fir.ReferenceType([type])
 
+    uniq_name=StringAttr(generateVariableUniqueName(program_state, var_name.data))
+
     # Operand segment sizes is wrong here, either hack it like trying (but doesn't match!) or understand why missing
-    fir_var_def = fir.Alloca.build(properties={"bindc_name": var_name, "uniq_name": StringAttr(generateVariableUniqueName(program_state, var_name.data)),
+    fir_var_def = fir.Alloca.build(properties={"bindc_name": var_name, "uniq_name": uniq_name,
       "in_type":type}, operands=[[],[]], regions=[[]], result_types=[ref_type])
 
+    hlfir_var_declar = hlfir.DeclareOp.build(properties={"uniq_name": uniq_name}, operands=[fir_var_def.results[0], [], []], result_types=[ref_type, ref_type])
+
     # relate variable identifier and SSA value by adding it into the current context
-    ctx[var_name.data] = fir_var_def.results[0]
-    return [fir_var_def]
+    ctx[var_name.data] = hlfir_var_declar.results[1]
+    return [fir_var_def, hlfir_var_declar]
 
 def define_array_var(ctx: SSAValueCtx,
                       var_def: psy_ast.VarDef, program_state : ProgramState) -> List[Operation]:
@@ -383,10 +387,20 @@ def define_array_var(ctx: SSAValueCtx,
         ctx[var_name.data] = addr_lookup.results[0]
         return [addr_lookup]
       else:
-        fir_var_def = fir.Alloca.build(properties={"bindc_name": var_name, "uniq_name": StringAttr(generateVariableUniqueName(program_state, var_name.data)),
-          "in_type":type}, operands=[[],[]], regions=[[]], result_types=[fir.ReferenceType([type])])
-        ctx[var_name.data] = fir_var_def.results[0]
-        return [fir_var_def]
+        sizes=get_array_sizes(var_def.var.type)
+        size_constants=[]
+        for s in sizes:
+          size_constants.append(arith.Constant.create(properties={"value": IntegerAttr.from_int_and_width(s, 32)}, result_types=[IndexType()]))
+
+        uniq_name=StringAttr(generateVariableUniqueName(program_state, var_name.data))
+        result_type=fir.ReferenceType([type])
+
+        fir_var_def = fir.Alloca.build(properties={"bindc_name": var_name, "uniq_name": uniq_name,
+          "in_type":type}, operands=[[],[]], regions=[[]], result_types=[result_type])
+        fir_shape = fir.Shape.build(operands=[size_constants], result_types=[fir.ShapeType([IntAttr(len(size_constants))])])
+        hlfir_var_declar = hlfir.DeclareOp.build(properties={"uniq_name": uniq_name}, operands=[fir_var_def.results[0], fir_shape, []], result_types=[result_type, result_type])
+        ctx[var_name.data] = hlfir_var_declar.results[0]
+        return size_constants+[fir_var_def, fir_shape, hlfir_var_declar]
 
 def count_array_type_contains_deferred(type):
   occurances=0
