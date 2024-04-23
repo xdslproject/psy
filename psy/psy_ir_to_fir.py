@@ -391,7 +391,7 @@ def define_array_var(ctx: SSAValueCtx,
         sizes=get_array_sizes(var_def.var.type)
         size_constants=[]
         for s in sizes:
-          size_constants.append(arith.Constant.create(properties={"value": IntegerAttr.from_int_and_width(s, 32)}, result_types=[IndexType()]))
+          size_constants.append(arith.Constant.create(properties={"value": IntegerAttr.from_int_and_width(s, IndexType())}, result_types=[IndexType()]))
 
         uniq_name=StringAttr(generateVariableUniqueName(program_state, var_name.data))
         result_type=fir.ReferenceType([type])
