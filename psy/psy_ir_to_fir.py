@@ -1,7 +1,8 @@
 from __future__ import annotations
 import importlib
 from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerType, ArrayAttr, i32, i64, f32, f64, f16, IndexType, DictionaryAttr, IntAttr,
-      Float16Type, Float32Type, Float64Type, FloatAttr, UnitAttr, DenseIntOrFPElementsAttr, SymbolRefAttr, AnyFloat, TupleType, UnrealizedConversionCastOp)
+      Float16Type, Float32Type, Float64Type, FloatAttr, UnitAttr, DenseIntOrFPElementsAttr, SymbolRefAttr, AnyFloat, TupleType, UnrealizedConversionCastOp,
+      DenseArrayBase)
 from xdsl.dialects import func, arith, cf, mpi #, gpu
 from xdsl.dialects.experimental import math, fir, hlfir
 from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext, BlockArgument
@@ -877,6 +878,7 @@ def translate_assign(ctx: SSAValueCtx,
       translated_target = ctx[assign.lhs.op.id.data]
 
     target_conversion_type=get_store_conversion_if_needed(translated_target.type, value_var.type)
+    rhs_ssa=value_var
     if target_conversion_type is not None:
       if isinstance(value_var.type, fir.ReferenceType):
         # This is a reference, therefore load it
@@ -885,9 +887,13 @@ def translate_assign(ctx: SSAValueCtx,
         # Otherwise data type conversion
         converter=fir.Convert.create(operands=[value_var], result_types=[target_conversion_type])
       value_fir.append(converter)
-      return value_fir + lhs_fir + [fir.Store.create(operands=[converter.results[0], translated_target])]
+      rhs_ssa=converter.results[0]
+
+    if isinstance(translated_target.owner, hlfir.DesignateOp):
+      store_op=hlfir.AssignOp(operands=[rhs_ssa, translated_target])
     else:
-      return value_fir + lhs_fir +[fir.Store.create(operands=[value_var, translated_target])]
+      store_op=fir.Store.create(operands=[rhs_ssa, translated_target])
+    return value_fir + lhs_fir + [store_op]
 
 def translate_call_expr_stmt(ctx: SSAValueCtx,
                              call_expr: psy_ir.CallExpr, program_state : ProgramState, is_expr=False) -> List[Operation]:
@@ -1322,7 +1328,7 @@ def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, 
 
   else:
     # This is a reference to an array, nice and easy just use it directly
-    ssa_list.append(ctx[op.var.var_name.data])
+    #ssa_list.append(ctx[op.var.var_name.data])
     base_type=ctx[op.var.var_name.data].type
 
     for idx, accessor in enumerate(op.accessors.blocks[0].ops):
@@ -1330,36 +1336,21 @@ def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, 
       # TODO - currently we assume always starts at 1 but in Fortran can set this so will need to keep track of that in the declaration and apply here
       expr, ssa=try_translate_expr(ctx, accessor, program_state)
       expressions.extend(expr)
-
-      subtraction_index=arith.Constant.create(properties={"value": IntegerAttr.from_int_and_width(1, 64)},
-                                          result_types=[i64])
-      expressions.append(subtraction_index)
-
-      lhs_conv_type, rhs_conv_type=get_expression_conversion_type(ssa.type, subtraction_index.results[0].type)
-
-      lhs_conv=perform_data_conversion_if_needed(ssa, lhs_conv_type)
-      if lhs_conv is not None:
-        expressions.append(lhs_conv)
-        lhs_ssa=lhs_conv.results[0]
+      if ssa.type.width.data != 64:
+        # Convert to 64 bit
+        conv=fir.Convert.create(operands=[ssa], result_types=[IntegerType(64)])
+        expressions.append(conv)
+        ssa_list.append(conv.results[0])
       else:
-        lhs_ssa=ssa
-
-      rhs_conv=perform_data_conversion_if_needed(subtraction_index.results[0], rhs_conv_type)
-      if rhs_conv is not None:
-        expressions.append(rhs_conv)
-        rhs_ssa=rhs_conv.results[0]
-      else:
-        rhs_ssa=subtraction_index.results[0]
-
-      substract_expr=arith.Subi(lhs_ssa, rhs_ssa)
-      expressions.append(substract_expr)
-      ssa_list.append(substract_expr.results[0])
+        ssa_list.append(ssa)
 
     fir_type=try_translate_type(op.var.type)
 
-  coordinate_of=fir.CoordinateOf.create(properties={"baseType": base_type}, operands=ssa_list, result_types=[fir.ReferenceType([fir_type.type])])
-  expressions.append(coordinate_of)
-  return expressions, coordinate_of.results[0]
+  triplet_array=DenseArrayBase.from_list(IntegerType(1), [0, 0])
+  designate=hlfir.DesignateOp.build(properties={"is_triplet": triplet_array},
+    operands=[ctx[op.var.var_name.data], [], ssa_list, [], [], []], result_types=[fir.ReferenceType([fir_type.type])])
+  expressions.append(designate)
+  return expressions, designate.results[0]
 
 
 def translate_nary_expr(ctx: SSAValueCtx,
