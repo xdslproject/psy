@@ -1287,32 +1287,15 @@ def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, 
     return unpack_mpi_array(ctx, op, program_state)
 
   if (has_nested_type(ctx[op.var.var_name.data].type, fir.BoxType) and has_nested_type(ctx[op.var.var_name.data].type, fir.HeapType)):
-    # We need to debox this
+    # An allocatable array
     box_type=get_nested_type(ctx[op.var.var_name.data].type, fir.BoxType)
     heap_type=get_nested_type(ctx[op.var.var_name.data].type, fir.HeapType)
     array_type=get_nested_type(ctx[op.var.var_name.data].type, fir.SequenceType)
 
     load_op=fir.Load.create(operands=[ctx[op.var.var_name.data]], result_types=[box_type])
+    hlfir_designate_var=load_op.results[0]
 
-    boxdims_ops=[]
-    ops_to_add=[]
-    for i in range(array_type.getNumberDims()):
-      dim_constant_op=arith.Constant.create(properties={"value": IntegerAttr.from_index_int_value(i)}, result_types=[IndexType()])
-      box_addr_op=fir.BoxDims.create(operands=[load_op.results[0], dim_constant_op.results[0]], result_types=[IndexType(), IndexType(), IndexType()])
-      boxdims_ops.append(box_addr_op)
-      ops_to_add+=[dim_constant_op, box_addr_op]
-
-    boxaddr_op=fir.BoxAddr.create(operands=[load_op.results[0]], result_types=[heap_type])
-    fir_type=fir.SequenceType(array_type.type, [fir.DeferredAttr()])
-
-    convert_to_1d_op=fir.Convert.create(operands=[boxaddr_op.results[0]], result_types=[fir.ReferenceType([fir_type])])
-
-    expressions+=[load_op] + ops_to_add + [boxaddr_op, convert_to_1d_op]
-    base_type=convert_to_1d_op.results[0].type
-
-    ssa_list.append(convert_to_1d_op.results[0])
-
-    arg_ssa_list=[]
+    expressions.append(load_op)
     for idx, accessor in enumerate(op.accessors.blocks[0].ops):
       # The array reference within a function call wraps the arguments in a range, so handle here
       if isinstance(accessor, psy_ir.Range):
@@ -1324,34 +1307,18 @@ def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, 
         expr, ssa=try_translate_expr(ctx, accessor, program_state)
         expressions.extend(expr)
 
-      index_conv=perform_data_conversion_if_needed(ssa, boxdims_ops[idx].results[0].type)
+      index_conv=perform_data_conversion_if_needed(ssa, IndexType())
       if index_conv is not None:
         expressions.append(index_conv)
         ssa=index_conv.results[0]
 
-      substract_expr=arith.Subi(ssa, boxdims_ops[idx].results[0])
-      expressions.append(substract_expr)
-
-      prev_dim=substract_expr.results[0]
-      for i in range(0, idx):
-        multiply_op=arith.Muli(boxdims_ops[i].results[1], prev_dim)
-        expressions.append(multiply_op)
-        prev_dim=multiply_op.results[0]
-
-      arg_ssa_list.append(prev_dim)
-
-    top_level=arg_ssa_list[0]
-    for i in range(1, len(arg_ssa_list)):
-      add_op=arith.Addi(top_level, arg_ssa_list[i])
-      expressions.append(add_op)
-      top_level=add_op.results[0]
-
-    ssa_list.append(top_level)
+      ssa_list.append(ssa)
 
   else:
     # This is a reference to an array, nice and easy just use it directly
     #ssa_list.append(ctx[op.var.var_name.data])
     base_type=ctx[op.var.var_name.data].type
+    hlfir_designate_var=ctx[op.var.var_name.data]
 
     for idx, accessor in enumerate(op.accessors.blocks[0].ops):
       # A lot of this is doing the subtraction to zero-base each index (default is starting at 1 in Fortran)
@@ -1366,11 +1333,11 @@ def translate_array_reference_expr(ctx: SSAValueCtx, op: psy_ir.ArrayReference, 
       else:
         ssa_list.append(ssa)
 
-    fir_type=try_translate_type(op.var.type)
+  fir_type=try_translate_type(op.var.type)
 
   triplet_array=DenseArrayBase.from_list(IntegerType(1), [0, 0])
   designate=hlfir.DesignateOp.build(properties={"is_triplet": triplet_array},
-    operands=[ctx[op.var.var_name.data], [], ssa_list, [], [], []], result_types=[fir.ReferenceType([fir_type.type])])
+    operands=[hlfir_designate_var, [], ssa_list, [], [], []], result_types=[fir.ReferenceType([fir_type.type])])
   expressions.append(designate)
   return expressions, designate.results[0]
 
