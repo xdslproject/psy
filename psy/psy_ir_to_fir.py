@@ -370,23 +370,43 @@ def define_array_var(ctx: SSAValueCtx,
       if num_deferred:
         heap_type=fir.HeapType([type])
         type=fir.BoxType([heap_type])
+
+        if program_state.isInRoutine():
+          uniq_name=StringAttr("_QF"+program_state.getRoutineName()+"E"+var_name.data)
+        else:
+          uniq_name=StringAttr("_QFE"+var_name.data)
+
+        result_type=fir.ReferenceType([type])
+
+        fir_var_def = fir.Alloca.build(properties={"bindc_name": var_name, "uniq_name": uniq_name,
+          "in_type":type}, operands=[[],[]], regions=[[]], result_types=[result_type])
         zero_bits=fir.ZeroBits.create(result_types=[heap_type])
         zero_val=arith.Constant.create(properties={"value": IntegerAttr.from_index_int_value(0)},
                                            result_types=[IndexType()])
         shape_ops=[]
         for i in range(num_deferred):
           shape_ops.append(zero_val.results[0])
+
         shape=fir.Shape.create(operands=shape_ops, result_types=[fir.ShapeType([IntAttr(num_deferred)])])
         embox=fir.Embox.build(operands=[zero_bits.results[0], shape.results[0], [], [], []], regions=[[]], result_types=[type])
-        has_val=fir.HasValue.create(operands=[embox.results[0]])
-        region_args=[zero_bits, zero_val, shape, embox, has_val]
+        store=fir.Store.create(operands=[embox.results[0], fir_var_def.results[0]])
 
-        glob=fir.Global.create(properties={"linkName": StringAttr("internal"), "sym_name": StringAttr("_QFE"+var_name.data), "symref": SymbolRefAttr("_QFE"+var_name.data), "type": type},
-            regions=[Region([Block(region_args)])])
-        addr_lookup=fir.AddressOf.create(properties={"symbol": SymbolRefAttr("_QFE"+var_name.data)}, result_types=[fir.ReferenceType([type])])
-        program_state.appendToGlobal(glob)
-        ctx[var_name.data] = addr_lookup.results[0]
-        return [addr_lookup]
+        fortran_attrs=fir.FortranVariableFlagsAttr([fir.FortranVariableFlags.ALLOCATABLE])
+
+        hlfir_var_declar = hlfir.DeclareOp.build(properties={"uniq_name": uniq_name, "fortran_attrs": fortran_attrs},
+            operands=[fir_var_def.results[0], [], []], result_types=[result_type, result_type])
+        ctx[var_name.data] = hlfir_var_declar.results[0]
+
+
+        #has_val=fir.HasValue.create(operands=[embox.results[0]])
+        #region_args=[zero_bits, zero_val, shape, embox, has_val]
+
+        #glob=fir.Global.create(properties={"linkName": StringAttr("internal"), "sym_name": StringAttr("_QFE"+var_name.data), "symref": SymbolRefAttr("_QFE"+var_name.data), "type": type},
+        #    regions=[Region([Block(region_args)])])
+        #addr_lookup=fir.AddressOf.create(properties={"symbol": SymbolRefAttr("_QFE"+var_name.data)}, result_types=[fir.ReferenceType([type])])
+        #program_state.appendToGlobal(glob)
+        #ctx[var_name.data] = addr_lookup.results[0]
+        return [fir_var_def, zero_bits, zero_val, shape, embox, store, hlfir_var_declar]
       else:
         sizes=get_array_sizes(var_def.var.type)
         size_constants=[]
