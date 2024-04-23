@@ -1046,22 +1046,21 @@ def translate_deallocate_intrinsic_call_expr(ctx: SSAValueCtx,
     if len(call_expr.args.blocks[0].ops) != 1:
       raise Exception(f"For deallocate expected 1 argument but {len(call_expr.args.blocks[0].ops)} are present")
 
-    op, arg = translate_expr(ctx, call_expr.args.blocks[0].ops.first, program_state)
-    # The translate expression unboxes this for us, so we need to look into the operation that does that
-    # which is a load, and then grab the origional SSA reference from that argument
-    # We use the load initially here to load in the box and unbox it
-    target_ssa=op[0].operands[0]
+    assert isinstance(call_expr.args.blocks[0].ops.first, psy_ir.ExprName)
+
+    var_name=call_expr.args.blocks[0].ops.first.var.var_name.data
+
+    target_ssa=ctx[var_name]
 
     box_type=get_nested_type(target_ssa.type, fir.BoxType)
     heap_type=get_nested_type(target_ssa.type, fir.HeapType)
     array_type=get_nested_type(target_ssa.type, fir.SequenceType)
     num_deferred=count_array_type_contains_deferred(array_type)
 
-    load_op=fir.Load.create(operands=[target_ssa], result_types=[box_type])
+    load_op=fir.Load.create(operands=[target_ssa.owner.results[1]], result_types=[box_type])
     box_addr_op=fir.BoxAddr.create(operands=[load_op.results[0]], result_types=[heap_type])
+    freemem_op=fir.Freemem.create(operands=[box_addr_op.results[0]])
 
-
-    freemem_op=fir.Freemem.create(operands=[arg])
     zero_bits_op=fir.ZeroBits.create(result_types=[heap_type])
     zero_val_op=arith.Constant.create(properties={"value": IntegerAttr.from_index_int_value(0)},
                                          result_types=[IndexType()])
@@ -1070,9 +1069,9 @@ def translate_deallocate_intrinsic_call_expr(ctx: SSAValueCtx,
       shape_operands.append(zero_val_op.results[0])
     shape_op=fir.Shape.create(operands=shape_operands, result_types=[fir.ShapeType([IntAttr(num_deferred)])])
     embox_op=fir.Embox.build(operands=[zero_bits_op.results[0], shape_op.results[0], [], [], []], regions=[[]], result_types=[box_type])
-    store_op=fir.Store.create(operands=[embox_op.results[0], target_ssa])
+    store_op=fir.Store.create(operands=[embox_op.results[0], target_ssa.owner.results[1]])
 
-    return op+[freemem_op, zero_bits_op, zero_val_op, shape_op, embox_op, store_op]
+    return [load_op, box_addr_op, freemem_op, zero_bits_op, zero_val_op, shape_op, embox_op, store_op]
 
 
 def translate_allocate_intrinsic_call_expr(ctx: SSAValueCtx,
@@ -1080,26 +1079,29 @@ def translate_allocate_intrinsic_call_expr(ctx: SSAValueCtx,
     ops: List[Operation] = []
     args: List[SSAValue] = []
 
-    for index, arg in enumerate(call_expr.args.blocks[0].ops):
-      op, ssa_arg = translate_expr(ctx, arg, program_state)
-      if index==0:
-        target_var=op
-        var_name="_QFE"+arg.var.var_name.data
-        # The translate expression already unboxes this for us, so we need to look into the operation that does that
-        # which is a load and we don't care about here, and then grab the origional SSA reference from that argument
-        target_ssa=op[0].operands[0]
-      else:
-        if op is not None: ops += op
-        convert_op=fir.Convert.create(operands=[ssa_arg], result_types=[IndexType()])
-        ops.append(convert_op)
-        args.append(convert_op.results[0])
+    alloc_args=call_expr.args.blocks[0].ops.first
+
+    var_name=alloc_args.var.var_name.data
+    target_ssa=ctx[var_name]
+
+    assert isinstance(call_expr.args.blocks[0].ops.first, psy_ir.ArrayReference)
+
+    for index, arg in enumerate(call_expr.args.blocks[0].ops.first.accessors.ops):
+      # Flang has an additional safety check that this index is not less than zero,
+      # but we omit that here
+      op, ssa_arg = translate_expr(ctx, arg.stop.ops.first, program_state)
+      convert_op=fir.Convert.create(operands=[ssa_arg], result_types=[IndexType()])
+      ops+=op
+      ops.append(convert_op)
+      args.append(convert_op.results[0])
+
     heap_type=get_nested_type(target_ssa.type, fir.HeapType)
     array_type=get_nested_type(target_ssa.type, fir.SequenceType)
 
     allocmem_op=fir.Allocmem.build(properties={"in_type":array_type, "uniq_name": StringAttr(var_name+".alloc")}, operands=[[], args], regions=[[]], result_types=[heap_type])
     shape_op=fir.Shape.create(operands=args, result_types=[fir.ShapeType([IntAttr(len(args))])])
     embox_op=fir.Embox.build(operands=[allocmem_op.results[0], shape_op.results[0], [], [], []], regions=[[]], result_types=[fir.BoxType([heap_type])])
-    store_op=fir.Store.create(operands=[embox_op.results[0], target_ssa])
+    store_op=fir.Store.create(operands=[embox_op.results[0], target_ssa.owner.results[1]]) # Store into the second SSA of the hlfir declare operation
     ops+=[allocmem_op, shape_op, embox_op, store_op]
     return ops
 
