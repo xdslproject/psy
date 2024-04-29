@@ -1193,7 +1193,7 @@ def try_translate_expr(
       return [op], op.results[0]
 
     if isinstance(op, psy_stencil.PsyStencil_DimIndex):
-      stencil_index_op=stencil.IndexOp.build(properties={"dim": IntegerAttr(op.index, 32), "offset": stencil.IndexAttr.get(0,0,0)}, result_types=[IndexType()])
+      stencil_index_op=stencil.IndexOp.build(attributes={"dim": IntegerAttr(op.index, 32), "offset": stencil.IndexAttr.get(0,0,0)}, result_types=[IndexType()])
       target_type=try_translate_type(op.original_type)
       assert target_type is not None
       data_conv_op=perform_data_conversion_if_needed(stencil_index_op.results[0], target_type)
