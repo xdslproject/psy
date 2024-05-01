@@ -152,7 +152,7 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
         stencil_ops+=ops
 
       stencil_ops.append(apply_stencil_op)
-
+      
       for output_arg in apply_stencil_op.res:
         for arg_use in output_arg.uses:
           stencil_ops.append(arg_use.operation)
@@ -205,7 +205,7 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
       # in the arguments (e.g. the argument passed to the extracted function)
       if ExtractStencilOps.stencilApplyNeedsArgsRewriting(apply_stencil_op):
         new_args=[]
-        for index, arg in enumerate(apply_stencil_op.args):
+        for index, arg in enumerate(sorted(apply_stencil_op.args)):
           if isinstance(arg.type, stencil.TempType):
             new_args.append(arg)
           else:
