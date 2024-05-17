@@ -334,7 +334,7 @@ class ApplyStencilRewriter(RewritePattern):
     def handle_stencil_for_target(self, visitor, index, target_var_name, for_loop: psy_ir.Loop, rewriter: PatternRewriter, unique_var_idx:int):
         read_vars=[]
         access_variables=[]
-        for read_var_name in visitor.written_to_read[index]:
+        for read_var_name in sorted(visitor.written_to_read[index]):
           read_var_v=visitor.read_variables[read_var_name]
           read_vars.append(read_var_v.var)
 

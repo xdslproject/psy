@@ -40,7 +40,7 @@ class _StencilExtractorRewriteBase(RewritePattern, ABC):
     input_types_translated=[]
     for typ in input_types:
       if isinstance(typ, fir.LLVMPointerType):
-        input_types_translated.append(llvm.LLVMPointerType.opaque()) 
+        input_types_translated.append(llvm.LLVMPointerType.opaque()) #typed(typ.type))
       else:
         input_types_translated.append(typ)
 
@@ -134,6 +134,8 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
       assert parent_func is not None and isinstance(parent_func, func.FuncOp)
       if "_InternalBridgeStencil_" in parent_func.sym_name.data: return
 
+      
+      # TODO (MJ): We need to ensure these arguments are ordered (sorted) consistently for the FPGA host code (match HLS kernel)
       input_args_to_ops={}
       stencil_ops=[]
       for input_arg in apply_stencil_op.args:
@@ -152,7 +154,7 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
         stencil_ops+=ops
 
       stencil_ops.append(apply_stencil_op)
-      
+
       for output_arg in apply_stencil_op.res:
         for arg_use in output_arg.uses:
           stencil_ops.append(arg_use.operation)
@@ -166,6 +168,7 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
       arg_ops=[]
       op_types=[]
       ops_to_add=[]
+      
       for key, value in itertools.chain(input_args_to_ops.items(), output_args_to_ops.items()):
           external_load_op=ExtractStencilOps.find_ExternalLoad(value)
           if external_load_op is not None:
@@ -205,7 +208,7 @@ class ExtractStencilOps(_StencilExtractorRewriteBase):
       # in the arguments (e.g. the argument passed to the extracted function)
       if ExtractStencilOps.stencilApplyNeedsArgsRewriting(apply_stencil_op):
         new_args=[]
-        for index, arg in enumerate(sorted(apply_stencil_op.args)):
+        for index, arg in enumerate(apply_stencil_op.args):
           if isinstance(arg.type, stencil.TempType):
             new_args.append(arg)
           else:
@@ -320,7 +323,7 @@ class ConnectExternalLoadToFunctionInput(RewritePattern):
     # be an LLVM pointer to this
     if not isinstance(ptr_type, llvm.LLVMPointerType):
       nt=ConnectExternalLoadToFunctionInput.get_nested_type(ptr_type, fir.SequenceType)
-      ptr_type=llvm.LLVMPointerType.opaque() 
+      ptr_type=llvm.LLVMPointerType.opaque() #typed(nt.type)
 
     array_typ=llvm.LLVMArrayType.from_size_and_type(builtin.IntAttr(number_dims), builtin.i64)
     struct_type=llvm.LLVMStructType.from_type_list([ptr_type, ptr_type, builtin.i64, array_typ, array_typ])
@@ -354,7 +357,7 @@ class ConnectExternalLoadToFunctionInput(RewritePattern):
 
     #if isinstance(ptr_type, llvm.LLVMPointerType):
     shape_int = [i if isinstance(i, int) else i.value.data for i in ConnectExternalLoadToFunctionInput.get_c_style_array_shape(array_type)]
-    target_memref_type=MemRefType(nt.type, shape_int) # Use the FIR type for the memref here
+    target_memref_type=MemRefType(nt.type, shape_int)
 
     unrealised_conv_cast_op=builtin.UnrealizedConversionCastOp.create(operands=[insert_stride_op.results[0]], result_types=[target_memref_type])
     ops_to_add.append(unrealised_conv_cast_op)
