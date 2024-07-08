@@ -26,22 +26,22 @@ class RewriteFirConvert(RewritePattern):
       builtin.Float64Type) or isinstance(in_type, builtin.Float16Type) and isinstance(out_type,
       builtin.Float64Type) or isinstance(in_type, builtin.Float16Type) and isinstance(out_type,
       builtin.Float32Type) :
-      new_conv=arith.ExtFOp.get(op.value, out_type)
+      new_conv=arith.ExtFOp(op.value, out_type)
 
     if isinstance(in_type, builtin.Float64Type) and isinstance(out_type,
       builtin.Float32Type) or isinstance(in_type, builtin.Float64Type) and isinstance(out_type,
       builtin.Float16Type) or isinstance(in_type, builtin.Float32Type) and isinstance(out_type,
       builtin.Float16Type) :
-      new_conv=arith.TruncFOp.get(op.value, out_type)
+      new_conv=arith.TruncFOp(op.value, out_type)
 
     if isinstance(in_type, builtin.IndexType) and isinstance(out_type, builtin.IntegerType):
-      new_conv=arith.IndexCastOp.get(op.value, out_type)
+      new_conv=arith.IndexCastOp(op.value, out_type)
 
     if isinstance(in_type, builtin.IntegerType) and isinstance(out_type, builtin.AnyFloat):
-      new_conv=arith.SIToFPOp.get(op.value, out_type)
+      new_conv=arith.SIToFPOp(op.value, out_type)
 
     if isinstance(in_type, builtin.AnyFloat) and isinstance(out_type, builtin.IntegerType):
-      new_conv=arith.FPToSIOp.get(op.value, out_type)
+      new_conv=arith.FPToSIOp(op.value, out_type)
 
     if new_conv is not None: rewriter.replace_matched_op(new_conv)
 
