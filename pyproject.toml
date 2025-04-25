@@ -26,4 +26,4 @@ dependencies = [
 where = ["psy"]
 
 [project.scripts]
-psy-opt = "tools.psy_opt:main"  # Ensure psy-opt has a main function.
+psy-opt = "psy.tools.psy_opt:main"
