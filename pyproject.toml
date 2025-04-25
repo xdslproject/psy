@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "psy"
+version = "0.1.0"
+description = "PSyclone xDSL transformations"
+authors = [
+    { name = "Nick Brown" },
+    { name = "Maurice Jamieson" },
+]
+readme = "README.md"
+license = { text = "BSD-3-Clause" }
+keywords = ["gpu", "stencil", "compiler"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    # Add more as needed
+]
+
+[tool.setuptools.packages.find]
+where = ["psy"]
+
+[project.scripts]
+psy-opt = "tools.psy_opt:main"  # Ensure psy-opt has a main function.
