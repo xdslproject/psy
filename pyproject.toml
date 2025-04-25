@@ -16,11 +16,10 @@ keywords = ["gpu", "stencil", "compiler"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: BSD License",
-    "Operating System :: OS Independent",
+    "Operating System :: OS Independent"
 ]
-dependencies = [
-    # Add more as needed
-]
+
+dependencies = []
 
 [tool.setuptools.packages.find]
 where = ["psy"]
