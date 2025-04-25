@@ -17,7 +17,7 @@ classifiers = [
     "Operating System :: OS Independent"
 ]
 
-dependencies = [ "xdsl<0.36"]
+dependencies = [ "xdsl<0.36", "psyclone@git+https://github.com/xdslproject/PSyclone.git@xdsl_backend"]
 
 [build-system]
 requires = ["setuptools", "wheel"]

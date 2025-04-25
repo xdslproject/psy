@@ -1,7 +1,8 @@
 from abc import ABC
 from dataclasses import dataclass
 from xdsl.utils.hints import isa
-from xdsl.ir import Operation, SSAValue, Region, Block, MLContext
+from xdsl.ir import Operation, SSAValue, Region, Block
+from xdsl.context import MLContext
 from xdsl.pattern_rewriter import (RewritePattern, PatternRewriter,
                                    op_type_rewrite_pattern,
                                    PatternRewriteWalker,
@@ -9,14 +10,14 @@ from xdsl.pattern_rewriter import (RewritePattern, PatternRewriter,
 from xdsl.passes import ModulePass
 from xdsl.dialects import builtin, func, llvm, arith, memref, gpu
 from xdsl.dialects.experimental import fir
-from util.visitor import Visitor
+from psy.util.visitor import Visitor
 
 class FindAddressOfForArray(Visitor):
   def __init__(self, array_name):
     self.array_name=array_name
     self.addressof_symbol=None
 
-  def traverse_address_of(self, addressof_op:fir.AddressOf):
+  def traverse_address_of(self, addressof_op:fir.AddressOfOp):
     if addressof_op.symbol.root_reference.data == self.array_name:
       self.addressof_symbol=addressof_op
 
@@ -31,7 +32,7 @@ class FindFirstStencilBridgedFunction(Visitor):
   def __init__(self):
     self.first_bridged_fn=None
 
-  def traverse_call(self, call_op:fir.Call):
+  def traverse_call(self, call_op:fir.CallOp):
     fn_name=call_op.callee.root_reference.data
     if "InternalBridgeStencil" in fn_name and self.first_bridged_fn is None:
       self.first_bridged_fn=call_op
@@ -40,7 +41,7 @@ class FindLastTimerStopFunction(Visitor):
   def __init__(self):
     self.last_timer_stop_fn=None
 
-  def traverse_call(self, call_op:fir.Call):
+  def traverse_call(self, call_op:fir.CallOp):
     fn_name=call_op.callee.root_reference.data
     if "timerPtimer_stop" in fn_name:
       self.last_timer_stop_fn=call_op
@@ -57,19 +58,19 @@ class GatherStencilBridgedFunctions(Visitor):
     return GatherStencilBridgedFunctions.get_nested_type(in_type.type, search_type)
 
   def get_symbol(token):
-    if isa(token, fir.Convert):
+    if isa(token, fir.ConvertOp):
       return GatherStencilBridgedFunctions.get_symbol(token.value.owner)
-    elif isa(token, fir.BoxAddr):
+    elif isa(token, fir.BoxAddrOp):
       return GatherStencilBridgedFunctions.get_symbol(token.val.owner)
-    elif isa(token, fir.Load):
+    elif isa(token, fir.LoadOp):
       return GatherStencilBridgedFunctions.get_symbol(token.memref.owner)
-    elif isa(token, fir.AddressOf):
-      array_type=GatherStencilBridgedFunctions.get_nested_type(token.results[0].typ, fir.SequenceType)
+    elif isa(token, fir.AddressOfOp):
+      array_type=GatherStencilBridgedFunctions.get_nested_type(token.results[0].typ, fir.SequenceTypeOp)
       return (token.symbol, array_type.type)
     else:
       assert False
 
-  def traverse_call(self, call_op:fir.Call):
+  def traverse_call(self, call_op:fir.CallOp):
     fn_name=call_op.callee.root_reference.data
     if "InternalBridgeStencil" in fn_name:
       self.stencil_bridge_calls[fn_name]=call_op
@@ -77,13 +78,13 @@ class GatherStencilBridgedFunctions(Visitor):
       arg_names=[]
       arg_ssas=[]
       for op in call_op.args:
-        if isa(op.owner, fir.Convert):
+        if isa(op.owner, fir.ConvertOp):
           # This is a convert, now walk backwards to grab the symbol
           # An array, we care about this!
           data_symbol=GatherStencilBridgedFunctions.get_symbol(op.owner)
           self.gpu_data_symbols.append(data_symbol)
           arg_names.append(data_symbol[0].root_reference.data)
-        elif isa(op.owner, fir.Load):
+        elif isa(op.owner, fir.LoadOp):
           # A scalar, we do not care, add a placeholder to ignore
           arg_names.append(None)
         arg_ssas.append(op)
@@ -95,9 +96,9 @@ class GetScalarAssignedValue(Visitor):
     self.scalar_name=scalar_name
     self.value=None
 
-  def traverse_store(self, store_op:fir.Store):
-    if isa(store_op.memref.owner, fir.Alloca) and store_op.memref.owner.uniq_name.data == self.scalar_name:
-      assert isa(store_op.value.owner, arith.Constant)
+  def traverse_store(self, store_op:fir.StoreOp):
+    if isa(store_op.memref.owner, fir.AllocaOp) and store_op.memref.owner.uniq_name.data == self.scalar_name:
+      assert isa(store_op.value.owner, arith.ConstantOp)
       assert isa(store_op.value.owner.value, builtin.IntegerAttr)
       self.value=store_op.value.owner.value.value.data
 
@@ -108,22 +109,22 @@ class DetermineArraySizeAndDims(Visitor):
     self.module=module
 
   def getScalarVariableName(token):
-    if isa(token, fir.Convert):
+    if isa(token, fir.ConvertOp):
       return DetermineArraySizeAndDims.getScalarVariableName(token.value.owner)
-    elif isa(token, fir.Load):
+    elif isa(token, fir.LoadOp):
       return DetermineArraySizeAndDims.getScalarVariableName(token.memref.owner)
-    elif isa(token, fir.Alloca):
+    elif isa(token, fir.AllocaOp):
       return token.uniq_name.data
     else:
       return None
 
-  def traverse_embox(self, embox_op:fir.Embox):
+  def traverse_embox(self, embox_op:fir.EmboxOp):
     for use in embox_op.results[0].uses:
-      if isa(use.operation, fir.Store):
-        assert isa(use.operation.memref.owner, fir.AddressOf)
+      if isa(use.operation, fir.StoreOp):
+        assert isa(use.operation.memref.owner, fir.AddressOfOp)
         data_symbol_name=use.operation.memref.owner.symbol.root_reference.data
         if data_symbol_name == self.symbol_name:
-          assert isa(embox_op.shape.owner, fir.Shape)
+          assert isa(embox_op.shape.owner, fir.ShapeOp)
           for extent in embox_op.shape.owner.extents:
             name=DetermineArraySizeAndDims.getScalarVariableName(extent.owner)
             if name is None: return
@@ -175,7 +176,7 @@ class GenerateSymbolGPUAllocations():
         assert allocDescriptor not in external_call_defs
         data_alloc_op=gpu.AllocOp(memref_type)
         extract_aligned_ptr_op=memref.ExtractAlignedPointerAsIndexOp.get(data_alloc_op)
-        index_cast_op=arith.IndexCastOp.get(extract_aligned_ptr_op, builtin.i64)
+        index_cast_op=arith.IndexCastOpOp.get(extract_aligned_ptr_op, builtin.i64)
         build_llvm_ptr_op=llvm.IntToPtrOp.get(index_cast_op, data_type)
 
         block = Block()
@@ -195,7 +196,7 @@ class GenerateSymbolGPUAllocations():
 
       target_fn_name=function_defs[allocDescriptor].sym_name.data
 
-      call_op=fir.Call.create(attributes={"callee": builtin.SymbolRefAttr(target_fn_name)}, operands=[], result_types=return_types)
+      call_op=fir.CallOpOp.create(attributes={"callee": builtin.SymbolRefAttr(target_fn_name)}, operands=[], result_types=return_types)
       call_ops.append(call_op)
 
     return function_defs.values(), call_ops, external_call_defs.values(), handled_symbol_types
@@ -216,19 +217,19 @@ class GenerateDataCopyBack():
     insert_aligned_ptr_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i64, [1])},
       operands=[insert_alloc_ptr_op.results[0], llvm_pointer], result_types=[struct_type])
 
-    offset_op=arith.Constant.from_int_and_width(0, 64)
+    offset_op=arith.ConstantOp.from_int_and_width(0, 64)
     insert_offset_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i64, [2])},
       operands=[insert_aligned_ptr_op.results[0], offset_op.results[0]], result_types=[struct_type])
 
     construction_ops=[undef_memref_struct, insert_alloc_ptr_op, insert_aligned_ptr_op, offset_op, insert_offset_op]
 
     for dim, dim_size in enumerate(dim_sizes):
-      size_op=arith.Constant.from_int_and_width(dim_size, 64)
+      size_op=arith.ConstantOp.from_int_and_width(dim_size, 64)
       insert_size_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i64, [3, dim])},
         operands=[construction_ops[-1].results[0], size_op.results[0]], result_types=[struct_type])
 
       # One for dimension stride
-      stride_op=arith.Constant.from_int_and_width(1, 64)
+      stride_op=arith.ConstantOp.from_int_and_width(1, 64)
       insert_stride_op=llvm.LLVMInsertValue.create(attributes={"position":  builtin.DenseArrayBase.from_list(builtin.i64, [4, dim])},
         operands=[insert_size_op.results[0], stride_op.results[0]], result_types=[struct_type])
 
@@ -242,14 +243,14 @@ class GenerateDataCopyBack():
     return construction_ops, unrealised_conv_cast_op.results[0]
 
   def construct_FIR_array_ptr_extract(array_full_data_type, address_of_ssa, base_type):
-    ptr_type=fir.LLVMPointerType([base_type])
+    ptr_type=fir.LLVMPointerTypeOp([base_type])
     result_ptr_type=llvm.LLVMPointerType.typed(base_type)
-    box_type=GatherStencilBridgedFunctions.get_nested_type(array_full_data_type, fir.BoxType)
-    heap_type=GatherStencilBridgedFunctions.get_nested_type(array_full_data_type, fir.HeapType)
+    box_type=GatherStencilBridgedFunctions.get_nested_type(array_full_data_type, fir.BoxTypeOp)
+    heap_type=GatherStencilBridgedFunctions.get_nested_type(array_full_data_type, fir.HeapTypeOp)
 
-    load_op=fir.Load.create(operands=[address_of_ssa], result_types=[box_type])
-    box_addr_op=fir.BoxAddr.create(operands=[load_op.results[0]], result_types=[heap_type])
-    convert_op=fir.Convert.create(operands=[box_addr_op.results[0]], result_types=[ptr_type])
+    load_op=fir.LoadOp.create(operands=[address_of_ssa], result_types=[box_type])
+    box_addr_op=fir.BoxAddrOp.create(operands=[load_op.results[0]], result_types=[heap_type])
+    convert_op=fir.ConvertOp.create(operands=[box_addr_op.results[0]], result_types=[ptr_type])
 
     return [load_op, box_addr_op, convert_op], convert_op.results[0]
 
@@ -273,7 +274,7 @@ class GenerateDataCopyBack():
     for symbol_name in gpu_pointer_names:
       # Two arg types per key, both llvm pointer
       arg_type=llvm.LLVMPointerType.typed(handled_symbol_types[symbol_name][0])
-      fir_arg_type=fir.LLVMPointerType([handled_symbol_types[symbol_name][0]])
+      fir_arg_type=fir.LLVMPointerTypeOp([handled_symbol_types[symbol_name][0]])
       argument_types+=[arg_type, arg_type]
       external_argument_types+=[fir_arg_type, arg_type]
       v=FindAddressOfForArray(symbol_name)
@@ -284,7 +285,7 @@ class GenerateDataCopyBack():
       data_ssas.append(named_gpu_pointers[symbol_name])
       call_data_convert_ops+=ops
 
-    call_op=fir.Call.create(attributes={"callee": builtin.SymbolRefAttr("GPU_copyback")}, operands=data_ssas, result_types=[])
+    call_op=fir.CallOpOp.create(attributes={"callee": builtin.SymbolRefAttr("GPU_copyback")}, operands=data_ssas, result_types=[])
     call_data_convert_ops.append(call_op)
 
     block = Block(arg_types=argument_types)
@@ -325,9 +326,9 @@ class InferGPUDataTransfer(ModulePass):
 
   def erase_unused_data_ops(op):
     op.parent.erase_op(op)
-    if isa(op, fir.Convert):
+    if isa(op, fir.ConvertOp):
       InferGPUDataTransfer.erase_unused_data_ops(op.value.owner)
-    elif isa(op, fir.BoxAddr):
+    elif isa(op, fir.BoxAddrOp):
       InferGPUDataTransfer.erase_unused_data_ops(op.val.owner)
 
   def apply(self, ctx: MLContext, module: builtin.ModuleOp):
@@ -348,12 +349,12 @@ class InferGPUDataTransfer(ModulePass):
           ssa_index=InferGPUDataTransfer.find_array_index(arg_name, stencil_bridged_functions)
           stencil_invoke.arg_ssas[idx]=call_ops[ssa_index].results[0]
 
-      new_call_op=fir.Call.create(attributes={"callee": builtin.SymbolRefAttr(stencil_invoke.name)}, operands=stencil_invoke.arg_ssas, result_types=[])
+      new_call_op=fir.CallOp.create(attributes={"callee": builtin.SymbolRefAttr(stencil_invoke.name)}, operands=stencil_invoke.arg_ssas, result_types=[])
       stencil_invoke.call_op.parent.insert_op_after(new_call_op, stencil_invoke.call_op)
       stencil_invoke.call_op.parent.erase_op(stencil_invoke.call_op)
       # Now erase all data loading for the origional call op
       for op in stencil_invoke.call_op.args:
-        if isa(op.owner, fir.Convert):
+        if isa(op.owner, fir.ConvertOp):
           # If owner is a convert then it's an array, therefore delete the loading as we use the pointer
           # instead, otherwise it is passing a scalar (is a load) and we need to keep that
           InferGPUDataTransfer.erase_unused_data_ops(op.owner)

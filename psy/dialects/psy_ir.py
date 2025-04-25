@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import List, Optional, Type, Union
-from util.list_ops import flatten
+from psy.util.list_ops import flatten
 from xdsl.dialects.builtin import IntegerAttr, StringAttr, ArrayAttr, ArrayOfConstraint, AnyAttr, IntAttr, FloatAttr
-from xdsl.ir import Data, MLContext, ParametrizedAttribute, Dialect
+from xdsl.ir import Data, ParametrizedAttribute, Dialect
+from xdsl.context import MLContext
 from xdsl.irdl import (AnyOf, ParameterDef, irdl_attr_definition, irdl_op_definition
-                       , attr_def, SingleBlockRegion, Region, Block, IRDLOperation, region_def)
+                       , attr_def, SingleBlockRegion, Region, Block, IRDLOperation, region_def, traits_def)
 from xdsl.traits import NoTerminator, IsTerminator
 from xdsl.parser import Parser
 from xdsl.printer import Printer
@@ -58,11 +59,11 @@ class NamedType(ParametrizedAttribute):
     precision : ParameterDef[AnyOf([IntAttr, EmptyAttr])]
 
     def set_kind(self, kind):
-      # 'self' is a 'frozen' DataClass, so unable to updated parameters directly 
+      # 'self' is a 'frozen' DataClass, so unable to updated parameters directly
       self.__dict__['parameters'] = (self.parameters[0], kind, self.parameters[2])
 
     def set_precision(self, precision):
-      # 'self' is a 'frozen' DataClass, so unable to updated parameters directly 
+      # 'self' is a 'frozen' DataClass, so unable to updated parameters directly
       self.__dict__['parameters'] = (self.parameters[0], self.parameters[1], precision)
 
 
@@ -151,7 +152,7 @@ class FileContainer(IRDLOperation):
     file_name= attr_def(StringAttr)
     children: Region = region_def()
 
-    traits = frozenset([NoTerminator()])
+    traits = traits_def(NoTerminator())
 
     @staticmethod
     def get(file_name: str,
@@ -177,7 +178,7 @@ class Container(IRDLOperation):
     public_routines= attr_def(StringAttr)
     private_routines= attr_def(StringAttr)
 
-    traits = frozenset([NoTerminator()])
+    traits = traits_def(NoTerminator())
 
     @staticmethod
     def get(container_name: str,
@@ -231,7 +232,7 @@ class Routine(IRDLOperation):
     local_var_declarations: Region = region_def()
     routine_body: Region = region_def()
 
-    traits = frozenset([NoTerminator()])
+    traits = traits_def(NoTerminator())
 
     @staticmethod
     def get(routine_name: Union[str, StringAttr],
@@ -272,7 +273,7 @@ class ArrayReference(IRDLOperation):
     var= attr_def(AnyAttr())
     accessors: Region = region_def()
 
-    traits = frozenset([NoTerminator()])
+    traits = traits_def(NoTerminator())
 
     @staticmethod
     def get(var,
@@ -348,7 +349,7 @@ class Assign(IRDLOperation):
     lhs: Region = region_def()
     rhs: Region = region_def()
 
-    traits = frozenset([NoTerminator()])
+    traits = traits_def(NoTerminator())
 
     @staticmethod
     def get(lhs: Operation,
@@ -394,7 +395,7 @@ class IfBlock(IRDLOperation):
     then: Region = region_def()
     orelse: Region = region_def()
 
-    traits = frozenset([NoTerminator()])
+    traits = traits_def(NoTerminator())
 
     @staticmethod
     def get(cond: Operation,
@@ -420,7 +421,7 @@ class Loop(IRDLOperation):
     step: Region = region_def()
     body: Region = region_def()
 
-    traits = frozenset([NoTerminator()])
+    traits = traits_def(NoTerminator())
 
     @staticmethod
     def get(variable,
@@ -440,7 +441,7 @@ class Loop(IRDLOperation):
 
 @irdl_op_definition
 class Return(IRDLOperation):
-    traits = frozenset([IsTerminator()])
+    traits = traits_def(IsTerminator())
     name = "psy.ir.return"
 
 @irdl_op_definition
@@ -451,7 +452,7 @@ class BinaryOperation(IRDLOperation):
     lhs: Region = region_def()
     rhs: Region = region_def()
 
-    traits = frozenset([NoTerminator()])
+    traits = traits_def(NoTerminator())
 
     @staticmethod
     def get_valid_ops() -> List[str]:
@@ -492,7 +493,7 @@ class UnaryOperation(IRDLOperation):
     op= attr_def(StringAttr)
     expr: Region = region_def()
 
-    traits = frozenset([NoTerminator()])
+    traits = traits_def(NoTerminator())
 
     @staticmethod
     def get_valid_ops() -> List[str]:
@@ -528,7 +529,7 @@ class NaryOperation(IRDLOperation):
     op= attr_def(StringAttr)
     expr: Region = region_def()
 
-    traits = frozenset([NoTerminator()])
+    traits = traits_def(NoTerminator())
 
     @staticmethod
     def get_valid_ops() -> List[str]:
@@ -555,7 +556,7 @@ class Range(IRDLOperation):
     stop: Region = region_def()
     step: Region = region_def()
 
-    traits = frozenset([NoTerminator()])
+    traits = traits_def(NoTerminator())
 
     @staticmethod
     def get(start: List[Operation],
@@ -581,7 +582,7 @@ class CallExpr(IRDLOperation):
     type= attr_def(AnyOf([NamedType, DerivedType, ArrayType, EmptyAttr]))
     args: Region = region_def()
 
-    traits = frozenset([NoTerminator()])
+    traits = traits_def(NoTerminator())
 
     @staticmethod
     def get(func: str,

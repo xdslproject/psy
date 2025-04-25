@@ -42,10 +42,10 @@ from xdsl.dialects.builtin import ModuleOp
 def trans(psy):
     #fvisitor = FortranWriter()
     writer = xDSLWriter()
-    printer = Printer(stream=sys.stdout)    
+    printer = Printer(stream=sys.stdout)
     routine_list=[]
     for invoke in psy.invokes.invoke_list:
-        sched = invoke.schedule        
+        sched = invoke.schedule
         routine_list.append(writer(sched))
 
     top_level=ModuleOp(routine_list)

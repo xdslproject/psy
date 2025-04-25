@@ -3,8 +3,9 @@ from typing import TypeVar, cast
 from dataclasses import dataclass
 import itertools
 from xdsl.utils.hints import isa
-from xdsl.dialects.memref import MemRefType
-from xdsl.ir import Operation, SSAValue, OpResult, Attribute, MLContext, Block, Region
+from xdsl.dialects.builtin import MemRefType
+from xdsl.ir import Operation, SSAValue, OpResult, Attribute, Block, Region
+from xdsl.context import MLContext
 
 from xdsl.pattern_rewriter import (RewritePattern, PatternRewriter,
                                    op_type_rewrite_pattern,

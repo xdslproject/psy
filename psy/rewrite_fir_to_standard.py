@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from xdsl.dialects.experimental import fir
 from xdsl.utils.hints import isa
 from xdsl.dialects.memref import MemRefType
-from xdsl.ir import Operation, SSAValue, OpResult, Attribute, MLContext, Block, Region
+from xdsl.ir import Operation, SSAValue, OpResult, Attribute, Block, Region
+from xdsl.context import MLContext
 
 from xdsl.pattern_rewriter import (RewritePattern, PatternRewriter,
                                    op_type_rewrite_pattern,
@@ -18,7 +19,7 @@ class RewriteFirConvert(RewritePattern):
   Rewrites FIR convert operation into standard dialect equivalent
   """
   @op_type_rewrite_pattern
-  def match_and_rewrite(self, op: fir.Convert, rewriter: PatternRewriter, /):
+  def match_and_rewrite(self, op: fir.ConvertOp, rewriter: PatternRewriter, /):
     in_type=op.value.type
     out_type=op.results[0].type
     new_conv=None

@@ -1,10 +1,10 @@
-#!/usr/bin/env python3.10
+#!/usr/bin/env python
 
 import argparse
 import ast, os, glob
 from io import IOBase
 
-from xdsl.ir import MLContext
+from xdsl.context import MLContext
 from xdsl.dialects.builtin import ModuleOp
 
 from psy.psy_ir_to_fir import LowerPsyIR
@@ -15,7 +15,7 @@ from psy.infer_gpu_data_transfer import InferGPUDataTransfer
 
 from psy.dialects.psy_ir import psyIR
 from psy.dialects.psy_stencil import psyStencil
-from util.semantic_error import SemanticError
+from psy.util.semantic_error import SemanticError
 
 from pathlib import Path
 
@@ -111,13 +111,13 @@ def main():
     try:
         psy_main.run()
         if psy_main.args.output_module_files:
-          chunks, file_extension = psy_main.prepare_input()
-          assert len(chunks) == 1
-          module=psy_main.parse_chunk(chunks[0], file_extension)
-          psy_main.apply_passes(module)
-          contents = psy_main.output_resulting_program(module)
-          _empty_generate_dir()
-          _output_modules_to_file_for_target(module, psy_main.args.target, psy_main)
+            chunks, file_extension = psy_main.prepare_input()
+            assert len(chunks) == 1
+            module=psy_main.parse_chunk(chunks[0], file_extension)
+            psy_main.apply_passes(module)
+            contents = psy_main.output_resulting_program(module)
+            _empty_generate_dir()
+            _output_modules_to_file_for_target(module, psy_main.args.target, psy_main)
     except SyntaxError as e:
         print(e.get_message())
         exit(0)

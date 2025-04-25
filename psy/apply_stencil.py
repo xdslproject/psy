@@ -1,7 +1,8 @@
 from xdsl.dialects.builtin import ModuleOp
 from dataclasses import dataclass
 import itertools
-from xdsl.ir import Operation, SSAValue, Region, Block, MLContext
+from xdsl.ir import Operation, SSAValue, Region, Block
+from xdsl.context import MLContext
 from xdsl.dialects.builtin import IntegerAttr, StringAttr, ArrayAttr, IntAttr
 from xdsl.pattern_rewriter import (GreedyRewritePatternApplier,
                                    PatternRewriter, PatternRewriteWalker,
@@ -9,7 +10,7 @@ from xdsl.pattern_rewriter import (GreedyRewritePatternApplier,
 
 from psy.dialects import psy_ir, psy_stencil
 from xdsl.passes import ModulePass
-from util.visitor import Visitor
+from psy.util.visitor import Visitor
 from enum import Enum
 import uuid
 

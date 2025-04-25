@@ -4,21 +4,23 @@ from xdsl.dialects.builtin import (StringAttr, ModuleOp, IntegerAttr, IntegerTyp
       Float16Type, Float32Type, Float64Type, FloatAttr, UnitAttr, DenseIntOrFPElementsAttr, SymbolRefAttr, AnyFloat, TupleType, UnrealizedConversionCastOp,
       DenseArrayBase)
 from xdsl.dialects import func, arith, cf, mpi #, gpu
-from xdsl.dialects.experimental import math, fir, hlfir
-from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, MLContext, BlockArgument
+from xdsl.dialects.experimental import fir, hlfir
+from xdsl.dialects import math
+from xdsl.ir import Operation, Attribute, ParametrizedAttribute, Region, Block, SSAValue, BlockArgument
+from xdsl.context import MLContext
 from psy.dialects import psy_ir, psy_stencil #, hpc_gpu
 from psy.support import SSAValueCtx, ProgramState
 from xdsl.dialects import stencil
 from xdsl.dialects.llvm import LLVMPointerType
 from xdsl.passes import ModulePass
-from util.list_ops import flatten
+from psy.util.list_ops import flatten
 import uuid
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Dict
 import copy
 
-binary_arith_op_matching={"ADD": [arith.Addi, arith.Addf], "SUB":[arith.Subi, arith.Subf], "MUL": [arith.Muli, arith.Mulf], "DIV": [arith.DivSI, arith.Divf], "REM": [arith.RemSI, None],
-"MIN" : [arith.MinSI, arith.Minimumf], "MAX" : [arith.MaxSI, arith.Maximumf], "POW" : [math.IPowIOp, None, None], "SIGN": [None, math.CopySignOp]}
+binary_arith_op_matching={"ADD": [arith.AddiOp, arith.AddfOp], "SUB":[arith.SubiOp, arith.SubfOp], "MUL": [arith.MuliOp, arith.MulfOp], "DIV": [arith.DivSIOp, arith.DivfOp], "REM": [arith.RemSIOp, None],
+"MIN" : [arith.MinSIOp, arith.MinimumfOp], "MAX" : [arith.MaxSIOp, arith.MaximumfOp], "POW" : [math.IPowIOp, None, None], "SIGN": [None, math.CopySignOp]}
 
 binary_arith_psy_to_arith_comparison_op={"EQ": "eq", "NE": "ne", "GT": "sgt", "LT": "slt", "GE": "sge", "LE": "sle"}
 
@@ -322,7 +324,7 @@ def define_derived_var(ctx: SSAValueCtx,
     assert isinstance(var_def.var.type, psy_ir.DerivedType)
     type_name=var_def.var.type.type.data
     if type_name == "mpi_request":
-      constant=arith.Constant.createarith.Constant.create(properties={"value": IntegerAttr.from_int_and_width(1, 32)}, result_types=[i32])
+      constant=arith.ConstantOp.createarith.ConstantOp.create(properties={"value": IntegerAttr.from_int_and_width(1, 32)}, result_types=[i32])
       mpi_request_alloc=mpi.AllocateTypeOp(mpi.RequestType, constant.results[0], var_name)
       ctx[var_name.data] = mpi_request_alloc.results[0]
       return [constant, mpi_request_alloc]
@@ -356,7 +358,7 @@ def define_array_var(ctx: SSAValueCtx,
       type_name=var_def.var.type.element_type.type.data
       if type_name == "mpi_request":
         sizes=get_array_sizes(var_def.var.type)
-        constant=arith.Constant.create(properties={"value": IntegerAttr.from_int_and_width(sizes[0], 32)}, result_types=[i32])
+        constant=arith.ConstantOp.create(properties={"value": IntegerAttr.from_int_and_width(sizes[0], 32)}, result_types=[i32])
         mpi_request_alloc=mpi.AllocateTypeOp.get(mpi.RequestType, constant.results[0], var_name)
         ctx[var_name.data] = mpi_request_alloc.results[0]
         return [constant, mpi_request_alloc]
@@ -381,7 +383,7 @@ def define_array_var(ctx: SSAValueCtx,
         fir_var_def = fir.Alloca.build(properties={"bindc_name": var_name, "uniq_name": uniq_name,
           "in_type":type}, operands=[[],[]], regions=[[]], result_types=[result_type])
         zero_bits=fir.ZeroBits.create(result_types=[heap_type])
-        zero_val=arith.Constant.create(properties={"value": IntegerAttr.from_index_int_value(0)},
+        zero_val=arith.ConstantOp.create(properties={"value": IntegerAttr.from_index_int_value(0)},
                                            result_types=[IndexType()])
         shape_ops=[]
         for i in range(num_deferred):
@@ -411,7 +413,7 @@ def define_array_var(ctx: SSAValueCtx,
         sizes=get_array_sizes(var_def.var.type)
         size_constants=[]
         for s in sizes:
-          size_constants.append(arith.Constant.create(properties={"value": IntegerAttr.from_int_and_width(s, IndexType())}, result_types=[IndexType()]))
+          size_constants.append(arith.ConstantOp.create(properties={"value": IntegerAttr.from_int_and_width(s, IndexType())}, result_types=[IndexType()]))
 
         uniq_name=StringAttr(generateVariableUniqueName(program_state, var_name.data))
         result_type=fir.ReferenceType([type])
@@ -831,10 +833,10 @@ def translate_loop(ctx: SSAValueCtx,
     block = Block(arg_types=[IndexType(), i32])
     store=fir.Store.create(operands=[block.args[1], iterator])
 
-    add_iteration_count=arith.Addi(block.args[0], conv_step)
+    add_iteration_count=arith.AddiOp(block.args[0], conv_step)
     load_iterator_var=fir.Load.create(operands=[iterator], result_types=[try_translate_type(for_stmt.variable.type)])
     convert_step_for_it=fir.Convert.create(operands=[conv_step.results[0]], result_types=[i32])
-    add_to_iterator=arith.Addi(load_iterator_var.results[0], convert_step_for_it.results[0])
+    add_to_iterator=arith.AddiOp(load_iterator_var.results[0], convert_step_for_it.results[0])
     block_result=fir.Result.create(operands=[add_iteration_count.results[0], add_to_iterator.results[0]])
 
     block.add_ops([store]+ops+[add_iteration_count, load_iterator_var, convert_step_for_it, add_to_iterator, block_result])
@@ -964,9 +966,9 @@ def translate_print_intrinsic_call_expr(ctx: SSAValueCtx,
 
     # Start the IO session
     filename_str_op=generate_string_literal("./dummy.F90", program_state)
-    arg1=arith.Constant.create(properties={"value": IntegerAttr.from_int_and_width(-1, 32)}, result_types=[i32])
+    arg1=arith.ConstantOp.create(properties={"value": IntegerAttr.from_int_and_width(-1, 32)}, result_types=[i32])
     arg2=fir.Convert.create(operands=[filename_str_op.results[0]], result_types=[fir.ReferenceType([IntegerType(8)])])
-    arg3=arith.Constant.create(properties={"value": IntegerAttr.from_int_and_width(3, 32)}, result_types=[i32])
+    arg3=arith.ConstantOp.create(properties={"value": IntegerAttr.from_int_and_width(3, 32)}, result_types=[i32])
 
     call1=fir.Call.create(properties={"callee": SymbolRefAttr("_FortranAioBeginExternalListOutput")}, operands=[arg1.results[0],
       arg2.results[0], arg3.results[0]], result_types=[fir.ReferenceType([IntegerType(8)])])
@@ -1030,7 +1032,7 @@ def generatePrintForString(program_state, op, arg, init_call_ssa):
     from_num=arg.type.type.from_index.data
     to_num=arg.type.type.to_index.data
     string_length=((to_num-from_num)+1)
-    str_len=arith.Constant.create(properties={"value": IntegerAttr.from_index_int_value(string_length)}, result_types=[IndexType()])
+    str_len=arith.ConstantOp.create(properties={"value": IntegerAttr.from_index_int_value(string_length)}, result_types=[IndexType()])
     arg2_2=fir.Convert.create(operands=[arg], result_types=[fir.ReferenceType([IntegerType(8)])])
     arg3_2=fir.Convert.create(operands=[str_len.results[0]], result_types=[i64])
     print_call=fir.Call.create(properties={"callee": SymbolRefAttr("_FortranAioOutputAscii")}, operands=[init_call_ssa,
@@ -1062,7 +1064,7 @@ def translate_deallocate_intrinsic_call_expr(ctx: SSAValueCtx,
     freemem_op=fir.Freemem.create(operands=[box_addr_op.results[0]])
 
     zero_bits_op=fir.ZeroBits.create(result_types=[heap_type])
-    zero_val_op=arith.Constant.create(properties={"value": IntegerAttr.from_index_int_value(0)},
+    zero_val_op=arith.ConstantOp.create(properties={"value": IntegerAttr.from_index_int_value(0)},
                                          result_types=[IndexType()])
     shape_operands=[]
     for i in range(num_deferred):
@@ -1153,7 +1155,7 @@ def translate_user_call_expr(ctx: SSAValueCtx,
             # uses assumed sizes for the size of the array
             array_type=get_nested_type(type_to_reference, fir.SequenceType)
             val=array_type.shape.data[0].value.data
-            constant_op=arith.Constant.create(properties={"value": IntegerAttr.from_index_int_value(val)}, result_types=[IndexType()])
+            constant_op=arith.ConstantOp.create(properties={"value": IntegerAttr.from_index_int_value(val)}, result_types=[IndexType()])
             shape_op=fir.Shape.create(operands=[constant_op.results[0]], result_types=[fir.ShapeType([IntAttr(1)])])
             embox_op=fir.Embox.build(operands=[arg, shape_op.results[0], [], [], []], regions=[[]], result_types=[fir.BoxType([array_type])])
             convert_op=fir.Convert.create(operands=[embox_op.results[0]], result_types=[fn_info.args[index]])
@@ -1369,10 +1371,10 @@ def translate_nary_expr(ctx: SSAValueCtx,
     else:
       comparison_op_str="olt" if attr.data == "MIN" else "ogt"
     prev_min_ssa=expr_ssa[0]
-    comparison_op=arith.Cmpi if isinstance(ssa_type, IntegerType) else arith.Cmpf
+    comparison_op=arith.CmpiOp if isinstance(ssa_type, IntegerType) else arith.CmpfOp
     for idx in range(1, len(expr_ssa)):
       compare_op=comparison_op(prev_min_ssa, expr_ssa[idx], comparison_op_str)
-      select_op=arith.Select(compare_op.results[0], prev_min_ssa, expr_ssa[idx])
+      select_op=arith.SelectOp(compare_op.results[0], prev_min_ssa, expr_ssa[idx])
       prev_min_ssa=select_op.results[0]
       ops_to_add+=[compare_op, select_op]
     return ops_to_add, prev_min_ssa
@@ -1398,9 +1400,9 @@ def translate_unary_expr_args(ctx: SSAValueCtx, operation: str,
     expr_ssa_value=load_op.results[0]
 
   if (operation == "NOT"):
-    constant_true=arith.Constant.create(properties={"value": IntegerAttr.from_int_and_width(1, 1)},
+    constant_true=arith.ConstantOp.create(properties={"value": IntegerAttr.from_int_and_width(1, 1)},
                                          result_types=[IntegerType(1)])
-    xori=arith.XOrI(expr_ssa_value, constant_true.results[0])
+    xori=arith.XOrIOp(expr_ssa_value, constant_true.results[0])
 
     return expr + [constant_true, xori], xori.results[0]
 
@@ -1420,11 +1422,11 @@ def translate_unary_expr_args(ctx: SSAValueCtx, operation: str,
 
   if (operation == "MINUS"):
     if isinstance(expr_ssa_value.type, AnyFloat):
-      negf_op=arith.Negf(expr_ssa_value)
+      negf_op=arith.NegfOp(expr_ssa_value)
       return expr + [negf_op], negf_op.results[0]
     elif isinstance(expr_ssa_value.type, IntegerType):
-      constant_op=arith.Constant.create(properties={"value": IntegerAttr(0, expr_ssa_value.type)}, result_types=[expr_ssa_value.type])
-      sub_op=arith.Subi(constant_op, expr_ssa_value)
+      constant_op=arith.ConstantOp.create(properties={"value": IntegerAttr(0, expr_ssa_value.type)}, result_types=[expr_ssa_value.type])
+      sub_op=arith.SubiOp(constant_op, expr_ssa_value)
       return expr + [constant_op, sub_op], sub_op.results[0]
     else:
       raise Exception(f"Can only issue minus on int or float, but issued on {expr_ssa_value.type}")
@@ -1530,13 +1532,13 @@ def get_arith_instance(operation:str, lhs, rhs, program_state : ProgramState):
 
   if (operation == "AND"):
     assert isinstance(operand_type, IntegerType), "Integer type only supported for 'and'"
-    return arith.AndI(lhs, rhs)
+    return arith.AndIOp(lhs, rhs)
   if (operation == "OR"):
     assert isinstance(operand_type, IntegerType), "Integer type only supported for 'or'"
-    return arith.OrI(lhs, rhs)
+    return arith.OrIOp(lhs, rhs)
 
   if operation in binary_arith_psy_to_arith_comparison_op:
-    return arith.Cmpi(lhs, rhs, binary_arith_psy_to_arith_comparison_op[operation])
+    return arith.CmpiOp(lhs, rhs, binary_arith_psy_to_arith_comparison_op[operation])
 
   raise Exception(f"Unable to handle arithmetic instance `{operation}`")
 
@@ -1547,12 +1549,12 @@ def translate_literal(op: psy_ir.Literal, program_state : ProgramState) -> Opera
     value = op.attributes["value"]
 
     if isinstance(value, IntegerAttr):
-        return arith.Constant.create(properties={"value": value},
+        return arith.ConstantOp.create(properties={"value": value},
                                          result_types=[value.type])
-        #return arith.Constant.from_int_and_width(value.value,value.type)
+        #return arith.ConstantOp.from_int_and_width(value.value,value.type)
 
     if isinstance(value, psy_ir.FloatAttr):
-        return arith.Constant.create(properties={"value": value},
+        return arith.ConstantOp.create(properties={"value": value},
                                          result_types=[value.type])
 
     if isinstance(value, StringAttr):
