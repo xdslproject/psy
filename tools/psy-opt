@@ -105,9 +105,9 @@ def _empty_generate_dir():
   for f in files:
     os.remove(f)
 
-def __main__():
+def main():
     psy_main = PsyOptMain()
-    
+
     try:
         psy_main.run()
         if psy_main.args.output_module_files:
@@ -126,4 +126,4 @@ def __main__():
         exit(0)
 
 if __name__ == "__main__":
-    __main__()
+    main()
